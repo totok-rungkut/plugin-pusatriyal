@@ -50,6 +50,8 @@ function puri_render_procurement_page() {
 
     // Render page (keaslian markup & UX dipertahankan), tambahkan nonce field untuk AJAX
     ?>
+
+	
     <div class="wrap">
     <style>
     /* minimal styles retained for readability */
@@ -57,7 +59,8 @@ function puri_render_procurement_page() {
     </style>
 
     <div class="panel">
-      <h2>📦 SALDO GUDANG UTAMA</h2>
+	
+	      <h2>📦 SALDO GUDANG UTAMA</h2>
       <div id="stock-summary-container"><em style="color:#94a3b8">Menghitung saldo…</em></div>
     </div>
 
