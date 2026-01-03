@@ -239,56 +239,60 @@ function puri_render_procurement_page() {
             </div>
         </form>
 
-        <!-- History (di luar form) -->
-        <div class="proc-panel history-table">
-            <h3>📋 Riwayat Pembelian Bulan Ini</h3>
-            <?php
-            $journal_table = puri_table_name('T_JOURNAL');
-            $current_month = date_i18n('Y-m');
-            
-            $hist = $wpdb->get_results($wpdb->prepare("
-                SELECT ref_id, MIN(trx_date) as trx_date, MIN(description) as description, 
-                       SUM(debit) as total_debit
-                FROM {$journal_table}
-                WHERE account_code = '1401' 
-                  AND DATE_FORMAT(trx_date, '%%Y-%%m') = %s
-                  AND ref_id LIKE 'PRO-%%'
-                GROUP BY ref_id
-                ORDER BY MIN(trx_date) DESC
-                LIMIT 10
-            ", $current_month));
-            ?>
-            <table class="widefat striped">
-                <thead>
-                    <tr>
-                        <th>Tanggal</th>
-                        <th>Kode Ref</th>
-                        <th>Deskripsi</th>
-                        <th style="text-align: right">Total (IDR)</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <?php if (empty($hist)): ?>
-                        <tr>
-                            <td colspan="4" style="text-align:center; color:#6b7280; padding:20px;">
-                                Belum ada pembelian bulan ini. 
-                            </td>
-                        </tr>
-                    <?php else: ?>
-                        <?php foreach ($hist as $h): ?>
-                        <tr>
-                            <td><?php echo esc_html(date_i18n('d M Y, H:i', strtotime($h->trx_date))); ?></td>
-                            <td><code><?php echo esc_html($h->ref_id); ?></code></td>
-                            <td><?php echo esc_html(wp_trim_words($h->description, 10)); ?></td>
-                            <td style="text-align: right; font-weight:700;">
-                                Rp <?php echo number_format_i18n($h->total_debit); ?>
-                            </td>
-                        </tr>
-                        <?php endforeach; ?>
-                    <?php endif; ?>
-                </tbody>
-            </table>
-        </div>
+
+		<!-- History (di luar form) -->
+		<div class="proc-panel history-table">
+			<h3>📋 Riwayat Pembelian Bulan Ini</h3>
+			<?php
+			$journal_table = puri_table_name('T_JOURNAL');
+			$current_month = date_i18n('Y-m');
+			
+			$hist = $wpdb->get_results($wpdb->prepare("
+				SELECT ref_id, MIN(trx_date) as trx_date, MIN(description) as description, 
+					   SUM(debit) as total_debit
+				FROM {$journal_table}
+				WHERE account_code = '1401' 
+				  AND DATE_FORMAT(trx_date, '%%Y-%%m') = %s
+				  AND ref_id LIKE 'PRO-%%'
+				GROUP BY ref_id
+				ORDER BY MIN(trx_date) DESC
+				LIMIT 10
+			", $current_month));
+			?>
+			<table class="widefat striped" style="table-layout: fixed; width: 100%;">
+				<thead>
+					<tr>
+						<th style="width: 140px;">Tanggal</th>
+						<th style="width: 160px;">Kode Ref</th>
+						<th>Deskripsi</th>
+						<th style="width:  150px; text-align: right;">Total (IDR)</th>
+					</tr>
+				</thead>
+				<tbody>
+					<?php if (empty($hist)): ?>
+						<tr>
+							<td colspan="4" style="text-align: center; color: #6b7280; padding: 20px;">
+								Belum ada pembelian bulan ini. 
+							</td>
+						</tr>
+					<?php else: ?>
+						<?php foreach ($hist as $h): ?>
+						<tr>
+							<td style="vertical-align: top;"><?php echo esc_html(date_i18n('d M Y, H: i', strtotime($h->trx_date))); ?></td>
+							<td style="vertical-align: top;"><code><?php echo esc_html($h->ref_id); ?></code></td>
+							<td style="word-wrap: break-word; white-space: normal; vertical-align: top;">
+								<?php echo esc_html($h->description); ?>
+							</td>
+							<td style="text-align: right; font-weight: 700; vertical-align: top;">
+								Rp <?php echo number_format_i18n($h->total_debit); ?>
+							</td>
+						</tr>
+						<?php endforeach; ?>
+					<?php endif; ?>
+				</tbody>
+			</table>
+		</div>
+
     </div>
 
     <script>
@@ -711,6 +715,16 @@ function puri_handle_procurement_submit() {
     $engine = puri_engine();
     
     $vendor_id = intval($_POST['vendor_id'] ?? 0);
+	// Ambil nama vendor dari judul post
+	$vendor_name = get_the_title($vendor_id) ?: 'Vendor #' . $vendor_id;
+
+	// ✅ Ambil KODE VENDOR dari ACF field 'vendor_code'
+	$vendor_code = get_field('vendor_code', $vendor_id);
+	if (empty($vendor_code)) {
+		// Fallback jika field belum diisi
+		$vendor_code = 'VND-' . str_pad($vendor_id, 2, '0', STR_PAD_LEFT);
+	}
+
     $items     = $_POST['items'] ?? [];
     $payments  = $_POST['payments'] ?? [];
     
@@ -748,7 +762,7 @@ function puri_handle_procurement_submit() {
         exit;
     }
     
-    $ref_id = 'PRO-' . date('Ymd-His') . '-' . wp_rand(100, 999);
+    $ref_id = 'PRO-' . date('ymdHi') . wp_rand(100, 999);
     $vendor_name = get_the_title($vendor_id) ?: 'Vendor #' . $vendor_id;
     
     $wpdb->query('START TRANSACTION');
@@ -813,6 +827,7 @@ function puri_handle_procurement_submit() {
                 throw new Exception('Gagal insert ledger: ' . $wpdb->last_error);
             }
             
+			
             $denom = intval($item->denom_value) ?: 1;
             $total_riyal = $qty * $denom;
             $subtotal = $total_riyal * $kurs;
@@ -822,6 +837,7 @@ function puri_handle_procurement_submit() {
                 'sku'      => $item->sku,
                 'qty'      => $qty,
                 'denom'    => $denom,
+				'total_riyal' => $total_riyal, 
                 'kurs'     => $kurs,
                 'subtotal' => $subtotal,
                 'new_hpp'  => $new_avg
@@ -832,11 +848,24 @@ function puri_handle_procurement_submit() {
             throw new Exception('Tidak ada item valid yang diproses');
         }
         
-        $desc_items = array_map(function($it) {
-            return $it['sku'] . ' (' . number_format($it['qty']) . ' pcs)';
-        }, $items_processed);
-        
-        $journal_desc = 'Kulakan dari ' . $vendor_name . ':  ' . implode(', ', $desc_items);
+		$desc_items = array_map(function($it) {
+			// Format:  SAR 5 (1.500 riyal @4.210)
+			return sprintf(
+				'SAR %s (%s riyal @%s)',
+				number_format($it['denom']),                      // Denom:  5, 10, 20, dll
+				number_format($it['total_riyal']),                // Total riyal:  1.500
+				number_format($it['kurs'], 0, ',', '.')           // Kurs: 4.210
+			);
+		}, $items_processed);
+
+		// Format:  Kulakan [TR-01] - Bank of Dubai : SAR 5 (1.500 riyal @4.210) ; SAR 20 (2.300 riyal @4.210)
+		$journal_desc = sprintf(
+			'Kulakan [%s] - %s : %s',
+			$vendor_code,                        // Kode vendor:  TR-01
+			$vendor_name,                        // Nama vendor: Bank of Dubai
+			implode(' ; ', $desc_items)          // Items dipisah dengan " ; "
+		);
+
         
         $journal_result = $engine->post_journal(
             $ref_id,
