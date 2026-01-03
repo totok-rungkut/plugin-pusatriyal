@@ -295,7 +295,11 @@ function puri_handle_import_upload() {
 /**
  * Confirm and execute import actions
  * - This is destructive: requires explicit confirmation checkbox
+ *
+ * FIXED: SQL Import Handler dengan Error Handling yang Proper
+ * Ganti fungsi puri_handle_import_confirm() di mc-17-data-io.php
  */
+
 function puri_handle_import_confirm() {
     if (!current_user_can('manage_options')) wp_die('Unauthorized');
     check_admin_referer('puri_dataio_action', 'puri_dataio_nonce');
@@ -306,7 +310,6 @@ function puri_handle_import_confirm() {
         exit;
     }
 
-    // Confirm checkbox
     if (empty($_POST['confirm_import']) || $_POST['confirm_import'] !== '1') {
         wp_redirect(add_query_arg('puri_io_err', 'not_confirmed', admin_url('admin.php?page=puri-data-io')));
         exit;
@@ -314,167 +317,216 @@ function puri_handle_import_confirm() {
 
     global $wpdb;
     $base_dir = $preview['dir'];
-
-    // Begin import (SQL then posts)
     $errors = [];
+    
+    // ✅ CRITICAL FIX: Set proper error mode
+    $wpdb->show_errors();
+    $wpdb->suppress_errors(false);
+
+    // Start transaction
     $wpdb->query('START TRANSACTION');
+    
     try {
-        // 1) SQL import (if present)
+        // ========== SQL IMPORT WITH PROPER ERROR HANDLING ==========
         $sqlpath = $base_dir . '/dump.sql';
-// --- START PATCH: more robust SQL import with safety checks & logging ---
-if (file_exists($sqlpath)) {
-    $sql = file_get_contents($sqlpath);
-    if ($sql === false) throw new Exception('Unable to read SQL dump file');
-
-    // Split statements: semicolon that is followed by newline (improved)
-    $stmts = preg_split('/;(?=\s*[\r\n])/m', $sql);
-    foreach ($stmts as $raw) {
-        $stmt = trim($raw);
-        if ($stmt === '') continue;
-
-        // Normalize: remove starting comments lines
-        $stmt = preg_replace('/^\s*--.*[\r\n]*/m', '', $stmt);
-        $stmt = trim($stmt);
-        if ($stmt === '') continue;
-
-        // Handle CREATE TABLE: skip if table exists; remove CHECK constraints; use IF NOT EXISTS
-        if (stripos($stmt, 'CREATE TABLE') !== false) {
-            // get table name
-            if (preg_match('/CREATE\s+TABLE\s+`?([^`\s(]+)`?/i', $stmt, $m)) {
-                $tbl = $m[1];
-            } else {
-                $tbl = '';
+        
+        if (file_exists($sqlpath)) {
+            $sql = file_get_contents($sqlpath);
+            if ($sql === false) {
+                throw new Exception('Unable to read SQL dump file');
             }
 
-            // If table already exists -> skip create (we don't want duplicate errors)
-            if ($tbl) {
-                $exists = $wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $wpdb->esc_like($tbl)));
-                if (!empty($exists)) {
-                    // log and skip
-                    if (function_exists('puri_dataio_log')) puri_dataio_log("Skipping CREATE for existing table: {$tbl}");
+            // Split by semicolon followed by newline
+            $stmts = preg_split('/;(?=\s*[\r\n])/m', $sql);
+            $processed = 0;
+            $skipped = 0;
+
+            foreach ($stmts as $raw) {
+                $stmt = trim($raw);
+                
+                // Skip empty or comment-only lines
+                if ($stmt === '' || preg_match('/^--/', $stmt)) {
                     continue;
                 }
-            }
 
-            // Remove CHECK constraints (CONSTRAINT name CHECK(...) and standalone CHECK(...))
-            $stmt_clean = preg_replace('/CONSTRAINT\s+`?[\w\-]+`?\s+CHECK\s*\([^\)]*\)/i', '', $stmt);
-            $stmt_clean = preg_replace('/CHECK\s*\([^\)]*\)/i', '', $stmt_clean);
+                // Remove inline comments
+                $stmt = preg_replace('/^\s*--.*[\r\n]*/m', '', $stmt);
+                $stmt = trim($stmt);
+                
+                if ($stmt === '') continue;
 
-            // Convert to CREATE TABLE IF NOT EXISTS
-            $stmt_clean = preg_replace('/CREATE\s+TABLE\s+/i', 'CREATE TABLE IF NOT EXISTS ', $stmt_clean, 1);
+                // ========== HANDLE CREATE TABLE ==========
+                if (stripos($stmt, 'CREATE TABLE') !== false) {
+                    // Extract table name
+                    if (preg_match('/CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?`?([^`\s(]+)`?/i', $stmt, $m)) {
+                        $tbl = $m[1];
+                        
+                        // Check if table exists
+                        $exists = $wpdb->get_var($wpdb->prepare(
+                            "SHOW TABLES LIKE %s", 
+                            $wpdb->esc_like($tbl)
+                        ));
+                        
+                        if (!empty($exists)) {
+                            $skipped++;
+                            error_log("PURI Import: Skipping CREATE - table exists: {$tbl}");
+                            continue;
+                        }
+                    }
 
-            $res = $wpdb->query($stmt_clean);
-            if ($res === false) {
-                // Log and continue
-                $err = $wpdb->last_error;
-                if (function_exists('puri_dataio_log')) puri_dataio_log("CREATE TABLE failed: {$err} | stmt: " . substr($stmt_clean,0,300));
-                $errors[] = 'SQL create error: ' . $err;
-                // do not throw; continue processing next statements
-            }
-            continue;
-        }
+                    // ✅ FIX: Remove CHECK constraints (MySQL 5.7 compatibility)
+                    $stmt = preg_replace('/,?\s*CONSTRAINT\s+`?[\w\-]+`?\s+CHECK\s*\([^\)]*\)/i', '', $stmt);
+                    $stmt = preg_replace('/,?\s*CHECK\s*\([^\)]*\)/i', '', $stmt);
+                    
+                    // Clean up double commas
+                    $stmt = preg_replace('/,\s*,/', ',', $stmt);
+                    
+                    // Ensure IF NOT EXISTS
+                    if (stripos($stmt, 'IF NOT EXISTS') === false) {
+                        $stmt = preg_replace('/CREATE\s+TABLE\s+/i', 'CREATE TABLE IF NOT EXISTS ', $stmt, 1);
+                    }
+                }
 
-        // Handle INSERT: ensure target table exists; otherwise skip
-        if (stripos($stmt, 'INSERT INTO') !== false) {
-            if (preg_match('/INSERT\s+INTO\s+`?([^`\s(]+)`?/i', $stmt, $m2)) {
-                $tbl_ins = $m2[1];
-                $exists2 = $wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $wpdb->esc_like($tbl_ins)));
-                if (empty($exists2)) {
-                    if (function_exists('puri_dataio_log')) puri_dataio_log("Skipping INSERT into missing table: {$tbl_ins}");
-                    $errors[] = "Skipping INSERT into missing table: {$tbl_ins}";
-                    continue;
+                // ========== HANDLE INSERT ==========
+                if (stripos($stmt, 'INSERT INTO') !== false) {
+                    // Verify target table exists
+                    if (preg_match('/INSERT\s+INTO\s+`?([^`\s(]+)`?/i', $stmt, $m2)) {
+                        $tbl_ins = $m2[1];
+                        $exists2 = $wpdb->get_var($wpdb->prepare(
+                            "SHOW TABLES LIKE %s", 
+                            $wpdb->esc_like($tbl_ins)
+                        ));
+                        
+                        if (empty($exists2)) {
+                            $skipped++;
+                            $errors[] = "Skipping INSERT into missing table: {$tbl_ins}";
+                            error_log("PURI Import: Table not found for INSERT: {$tbl_ins}");
+                            continue;
+                        }
+                    }
+                }
+
+                // ========== EXECUTE STATEMENT ==========
+                $res = $wpdb->query($stmt . ';');
+                
+                if ($res === false) {
+                    $err = $wpdb->last_error;
+                    $short_stmt = substr($stmt, 0, 200);
+                    
+                    // ✅ CRITICAL: Determine if error is fatal
+                    $is_fatal = true;
+                    
+                    // Non-fatal errors to ignore
+                    if (stripos($err, 'Duplicate entry') !== false) {
+                        $is_fatal = false;
+                        $skipped++;
+                    } elseif (stripos($err, 'already exists') !== false) {
+                        $is_fatal = false;
+                        $skipped++;
+                    }
+                    
+                    if ($is_fatal) {
+                        error_log("PURI Import FATAL: {$err} | stmt: {$short_stmt}");
+                        throw new Exception("SQL execution failed: {$err}");
+                    } else {
+                        error_log("PURI Import WARNING (skipped): {$err}");
+                        $errors[] = "Warning: {$err}";
+                    }
+                } else {
+                    $processed++;
                 }
             }
+            
+            error_log("PURI Import: SQL processed={$processed}, skipped={$skipped}");
         }
 
-        // Try to execute the statement
-        $res = $wpdb->query($stmt . ';'); // add semicolon to be safe
-        if ($res === false) {
-            $err = $wpdb->last_error;
-            // Log full context (first 400 chars of stmt)
-            $short = substr($stmt, 0, 400);
-            if (function_exists('puri_dataio_log')) puri_dataio_log("SQL error: {$err} | stmt: {$short}");
-            $errors[] = "SQL error: {$err} | stmt: {$short}";
-            // DO NOT throw: continue with next statements to collect more errors
-            continue;
-        }
-    } // endforeach stmts
-} // endif file_exists
-// --- END PATCH ---
-
-        // 2) Posts import
+        // ========== POSTS IMPORT ==========
         $posts_path = $base_dir . '/posts.json';
+        $posts_imported = 0;
+        
         if (file_exists($posts_path)) {
             $json = file_get_contents($posts_path);
             $data = json_decode($json, true);
-            if (!is_array($data) || empty($data['posts'])) {
-                // no posts to import
-            } else {
+            
+            if (is_array($data) && !empty($data['posts'])) {
                 foreach ($data['posts'] as $post_item) {
                     $args = [
                         'post_type' => sanitize_text_field($post_item['post_type'] ?? 'post'),
                         'post_status' => sanitize_text_field($post_item['post_status'] ?? 'publish'),
                         'post_title' => sanitize_text_field($post_item['post_title'] ?? ''),
-                        'post_content' => isset($post_item['post_content']) ? $post_item['post_content'] : '',
-                        'post_excerpt' => isset($post_item['post_excerpt']) ? $post_item['post_excerpt'] : '',
+                        'post_content' => wp_kses_post($post_item['post_content'] ?? ''),
+                        'post_excerpt' => sanitize_textarea_field($post_item['post_excerpt'] ?? ''),
                         'post_author' => intval($post_item['post_author'] ?? get_current_user_id()),
                         'menu_order' => intval($post_item['menu_order'] ?? 0),
                         'post_date' => $post_item['post_date'] ?? current_time('mysql'),
                     ];
 
-                    // If original ID exists and a post with that ID already exists, update; else insert
                     $orig_id = intval($post_item['ID'] ?? 0);
                     $existing = $orig_id ? get_post($orig_id) : null;
+                    
                     if ($existing && $existing->post_type === $args['post_type']) {
-                        // Update existing (preserve ID)
                         $args['ID'] = $orig_id;
                         $new_id = wp_update_post($args, true);
-                        if (is_wp_error($new_id)) throw new Exception('wp_update_post error: ' . $new_id->get_error_message());
                     } else {
-                        // Insert new (do not try to force ID)
                         $new_id = wp_insert_post($args, true);
-                        if (is_wp_error($new_id)) throw new Exception('wp_insert_post error: ' . $new_id->get_error_message());
+                    }
+                    
+                    if (is_wp_error($new_id)) {
+                        throw new Exception('Post import failed: ' . $new_id->get_error_message());
                     }
 
-                    // Meta
+                    // Import meta
                     if (!empty($post_item['meta']) && is_array($post_item['meta'])) {
                         foreach ($post_item['meta'] as $mk => $mvals) {
-                            // mvals is array of values
-                            // Remove existing meta key and re-add to mimic original state
                             delete_post_meta($new_id, $mk);
                             if (is_array($mvals)) {
                                 foreach ($mvals as $mv) {
-                                    // Try to maybe_unserialize to restore arrays if stored
-                                    $value = maybe_unserialize($mv);
-                                    add_post_meta($new_id, $mk, $value);
+                                    add_post_meta($new_id, $mk, maybe_unserialize($mv));
                                 }
                             } else {
                                 add_post_meta($new_id, $mk, maybe_unserialize($mvals));
                             }
                         }
                     }
-                } // foreach post
+                    
+                    $posts_imported++;
+                }
             }
         }
 
-        // All good
+        // ✅ SUCCESS - Commit transaction
         $wpdb->query('COMMIT');
-        // Clear preview transient
         delete_transient('puri_dataio_import_preview_' . get_current_user_id());
-
-        // Cleanup: remove extracted dir
         puri_rrmdir($base_dir);
 
-        wp_redirect(add_query_arg('puri_io_ok', 'import_done', admin_url('admin.php?page=puri-data-io')));
+        $success_msg = sprintf(
+            'Import berhasil! SQL statements processed, %d posts imported.', 
+            $posts_imported
+        );
+        
+        if (!empty($errors)) {
+            $success_msg .= ' Dengan ' . count($errors) . ' peringatan non-fatal.';
+        }
+
+        wp_redirect(add_query_arg('puri_io_ok', urlencode($success_msg), admin_url('admin.php?page=puri-data-io')));
         exit;
+
     } catch (Exception $e) {
+        // ✅ ROLLBACK on any error
         $wpdb->query('ROLLBACK');
-        $errors[] = $e->getMessage();
-        // Keep the extracted files for inspection
-        wp_redirect(add_query_arg('puri_io_err', urlencode(implode('|', $errors)), admin_url('admin.php?page=puri-data-io')));
+        
+        error_log('PURI Import FAILED: ' . $e->getMessage());
+        
+        $error_msg = 'Import gagal: ' . $e->getMessage();
+        if (!empty($errors)) {
+            $error_msg .= ' | Errors: ' . implode('; ', array_slice($errors, 0, 3));
+        }
+        
+        wp_redirect(add_query_arg('puri_io_err', urlencode($error_msg), admin_url('admin.php?page=puri-data-io')));
         exit;
     }
 }
+
 
 /* ---------------------------
    Utility: recursive remove directory

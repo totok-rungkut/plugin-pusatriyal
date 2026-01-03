@@ -150,7 +150,11 @@ function puri_render_welcome_screen() {
  */
 add_action('restrict_manage_posts', function() {
     if (get_current_screen() && get_current_screen()->post_type === 'pr_item' && current_user_can('manage_options')) {
-        $sync_url = esc_url(add_query_arg(['puri_mass_sync' => '1'], admin_url('edit.php?post_type=pr_item')));
+        $sync_url = wp_nonce_url(
+            add_query_arg(['puri_mass_sync' => '1'], admin_url('edit.php?post_type=pr_item')),
+            'puri_mass_sync_action',  // action name
+            'puri_sync_nonce'          // nonce key name
+        );
         echo '<a href="' . $sync_url . '" class="button button-primary" style="background:#0f172a;border:none;margin-left:10px;">⚡ SINKRONISASI MASSAL KE SQL</a>';
     }
 });
@@ -160,46 +164,120 @@ add_action('restrict_manage_posts', function() {
  * NOTE: we intentionally protect by capability and nonce via transient (confirm via GET -> then render page with nonce form).
  */
 add_action('admin_init', function() {
-    // If quick one-click URL was used, redirect to confirmation page (to require nonce)
-    if (isset($_GET['puri_mass_sync']) && $_GET['puri_mass_sync'] === '1' && get_current_screen() && get_current_screen()->post_type === 'pr_item') {
+    // Step 1: Initial click from button (GET request dengan nonce)
+    if (isset($_GET['puri_mass_sync']) && $_GET['puri_mass_sync'] === '1' && 
+        get_current_screen() && get_current_screen()->post_type === 'pr_item') {
+        
+        // ✅ CRITICAL FIX: Verify nonce dari URL GET
+        if (!isset($_GET['puri_sync_nonce']) || !wp_verify_nonce($_GET['puri_sync_nonce'], 'puri_mass_sync_action')) {
+            wp_die('Security check failed. Nonce verification failed.', 'Unauthorized', ['response' => 403]);
+        }
+        
         puri_check_cap('manage_options');
-        // Render a confirmation UI using admin_notices and a nonce-protected form
+        
+        // Render confirmation UI with POST form
         add_action('admin_notices', function() {
-            $action_url = esc_url(add_query_arg([], admin_url('edit.php?post_type=pr_item')));
-            echo '<div class="notice notice-warning is-dismissible"><p><strong>Mass Sync SKU ke SQL</strong> — Anda harus mengkonfirmasi operasi sinkronisasi massal.</p>';
+            $action_url = esc_url(admin_url('edit.php?post_type=pr_item'));
+            echo '<div class="notice notice-warning is-dismissible">';
+            echo '<p><strong>Mass Sync SKU ke SQL</strong> – Anda harus mengkonfirmasi operasi sinkronisasi massal.</p>';
             echo '<form method="post" style="display:inline-block;">';
+            
+            // ✅ Use helper function untuk create nonce field
             puri_create_admin_nonce_field();
+            
             echo '<input type="hidden" name="puri_confirm_mass_sync" value="1" />';
             echo '<button class="button button-primary" type="submit">Konfirmasi Sinkronisasi</button>';
             echo '</form> ';
-            echo '<a class="button" href="' . esc_url(remove_query_arg('puri_mass_sync')) . '">Batalkan</a>';
+            
+            // Cancel button dengan nonce di URL untuk clean redirect
+            $cancel_url = wp_nonce_url(
+                remove_query_arg(['puri_mass_sync', 'puri_sync_nonce']),
+                'puri_cancel_sync',
+                'cancel_nonce'
+            );
+            echo '<a class="button" href="' . esc_url($cancel_url) . '">Batalkan</a>';
             echo '</div>';
         });
     }
 
-    // Handle confirmed sync
+    // Step 2: Confirmed sync (POST request)
     if (isset($_POST['puri_confirm_mass_sync']) && isset($_POST['puri_admin_nonce'])) {
+        // ✅ Verify POST nonce
         if (!wp_verify_nonce(sanitize_text_field($_POST['puri_admin_nonce']), 'puri_admin_action')) {
-            wp_die('Nonce verification failed.');
+            wp_die('Nonce verification failed.', 'Security Error', ['response' => 403]);
         }
+        
         puri_check_cap('manage_options');
+        
         global $wpdb;
-        $posts = get_posts(['post_type' => 'pr_item', 'numberposts' => -1, 'fields' => 'ids']);
         $count = 0;
-        foreach ($posts as $post_id) {
-            $sku = get_field('item_sku_code', $post_id);
-            if (!$sku) continue;
-            $wpdb->replace($wpdb->prefix . T_ITEMS, [
-                'sku' => sanitize_text_field($sku),
-                'name' => get_the_title($post_id),
-                'type' => get_field('type', $post_id),
-                'denom_value' => intval(get_field('denom_value', $post_id) ?: 1),
-                'sell_rate' => floatval(get_field('sell_rate', $post_id) ?: 0)
-            ]);
-            $count++;
+        $errors = [];
+        
+        // ✅ IMPROVEMENT: Add transaction for atomic operation
+        $wpdb->query('START TRANSACTION');
+        
+        try {
+            $posts = get_posts(['post_type' => 'pr_item', 'numberposts' => -1, 'fields' => 'ids']);
+            
+            foreach ($posts as $post_id) {
+                $sku = get_field('item_sku_code', $post_id);
+                if (!$sku) {
+                    $errors[] = "Post ID {$post_id}: SKU kosong, dilewati";
+                    continue;
+                }
+                
+                // ✅ IMPROVEMENT: Validate data sebelum insert
+                $item_data = [
+                    'sku' => sanitize_text_field($sku),
+                    'name' => get_the_title($post_id),
+                    'type' => get_field('type', $post_id) ?: 'currency',
+                    'denom_value' => max(1, intval(get_field('denom_value', $post_id) ?: 1)),
+                    'sell_rate' => max(0, floatval(get_field('sell_rate', $post_id) ?: 0))
+                ];
+                
+                $result = $wpdb->replace(
+                    $wpdb->prefix . T_ITEMS, 
+                    $item_data
+                );
+                
+                if ($result === false) {
+                    throw new Exception("Failed to sync post ID {$post_id}: " . $wpdb->last_error);
+                }
+                
+                $count++;
+            }
+            
+            // ✅ Commit jika semua berhasil
+            $wpdb->query('COMMIT');
+            
+            // Success notice
+            add_action('admin_notices', function() use ($count, $errors) {
+                echo '<div class="notice notice-success is-dismissible">';
+                echo '<p>✅ <strong>Sukses!</strong> ' . intval($count) . ' Item SKU telah disinkronkan ke tabel SQL.</p>';
+                
+                if (!empty($errors)) {
+                    echo '<details><summary>Peringatan (' . count($errors) . ' item dilewati)</summary><ul>';
+                    foreach (array_slice($errors, 0, 10) as $err) {
+                        echo '<li>' . esc_html($err) . '</li>';
+                    }
+                    if (count($errors) > 10) {
+                        echo '<li><em>... dan ' . (count($errors) - 10) . ' lainnya</em></li>';
+                    }
+                    echo '</ul></details>';
+                }
+                echo '</div>';
+            });
+            
+        } catch (Exception $e) {
+            // ✅ Rollback on error
+            $wpdb->query('ROLLBACK');
+            
+            add_action('admin_notices', function() use ($e, $count) {
+                echo '<div class="notice notice-error is-dismissible">';
+                echo '<p>❌ <strong>Gagal!</strong> Sinkronisasi dibatalkan setelah ' . intval($count) . ' item.</p>';
+                echo '<p>Error: ' . esc_html($e->getMessage()) . '</p>';
+                echo '</div>';
+            });
         }
-        add_action('admin_notices', function() use ($count) {
-            echo '<div class="notice notice-success is-dismissible"><p>✅ Sukses! ' . intval($count) . ' Item SKU telah disinkronkan ke tabel SQL.</p></div>';
-        });
     }
 });

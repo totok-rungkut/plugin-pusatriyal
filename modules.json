@@ -1,0 +1,29 @@
+{
+  "order": [
+    "mc-00-admin-hub.php",
+    "mc-01-core.php",
+    "mc-03-engine.php",
+    "mc-02-data-model.php",
+    "mc-04-procurement.php",
+    "mc-05-pos.php",
+    "mc-06-visitor-cockpit.php",
+    "mc-07-queue-orders.php",
+    "mc-08-stock-transfer.php",
+    "mc-09-consignment.php",
+    "mc-10-expenses.php",
+    "mc-11-journal.php",
+    "mc-12-pl.php",
+    "mc-13-matrix.php",
+    "mc-14-balance.php",
+    "mc-15-invoice.php",
+    "mc-16-monitoring.php",
+    "mc-17-data-io.php",
+    "mc-17-maintenance.php",
+    "mc-18-webhook.php",
+    "mc-19-crud-partnership.php",
+    "mc-20-inventory-ledger.php",
+    "mc-21-daily-riyal.php",
+    "mc-22-pivot.php",
+    "mc-23-reserved.php"
+  ]
+}
