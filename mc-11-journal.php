@@ -71,3 +71,4 @@ function puri_render_journal_page() {
     </div>
     <?php
 }
+

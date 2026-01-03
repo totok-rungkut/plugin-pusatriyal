@@ -341,101 +341,135 @@ function puri_handle_import_confirm() {
             $processed = 0;
             $skipped = 0;
 
-            foreach ($stmts as $raw) {
-                $stmt = trim($raw);
-                
-                // Skip empty or comment-only lines
-                if ($stmt === '' || preg_match('/^--/', $stmt)) {
-                    continue;
-                }
+foreach ($stmts as $raw) {
+    $stmt = trim($raw);
+    
+    // Skip empty or comment-only lines
+    if ($stmt === '' || preg_match('/^--/', $stmt)) {
+        continue;
+    }
 
-                // Remove inline comments
-                $stmt = preg_replace('/^\s*--.*[\r\n]*/m', '', $stmt);
-                $stmt = trim($stmt);
-                
-                if ($stmt === '') continue;
+    // Remove inline comments
+    $stmt = preg_replace('/^\s*--.*[\r\n]*/m', '', $stmt);
+    $stmt = trim($stmt);
+    
+    if ($stmt === '') continue;
 
-                // ========== HANDLE CREATE TABLE ==========
-                if (stripos($stmt, 'CREATE TABLE') !== false) {
-                    // Extract table name
-                    if (preg_match('/CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?`?([^`\s(]+)`?/i', $stmt, $m)) {
-                        $tbl = $m[1];
-                        
-                        // Check if table exists
-                        $exists = $wpdb->get_var($wpdb->prepare(
-                            "SHOW TABLES LIKE %s", 
-                            $wpdb->esc_like($tbl)
-                        ));
-                        
-                        if (!empty($exists)) {
-                            $skipped++;
-                            error_log("PURI Import: Skipping CREATE - table exists: {$tbl}");
-                            continue;
-                        }
-                    }
+    // ========== 🔒 SECURITY LAYER 1:  BLOCK DANGEROUS COMMANDS ==========
+    if (preg_match('/\b(DROP|TRUNCATE|ALTER|GRANT|REVOKE|LOAD_FILE|OUTFILE)\b/i', $stmt)) {
+        $skipped++;
+        $short = substr($stmt, 0, 80);
+        error_log("PURI Import BLOCKED (dangerous): {$short}");
+        $errors[] = "Blocked dangerous SQL: " . $short;
+        continue; // SKIP statement ini
+    }
 
-                    // ✅ FIX: Remove CHECK constraints (MySQL 5.7 compatibility)
-                    $stmt = preg_replace('/,?\s*CONSTRAINT\s+`?[\w\-]+`?\s+CHECK\s*\([^\)]*\)/i', '', $stmt);
-                    $stmt = preg_replace('/,?\s*CHECK\s*\([^\)]*\)/i', '', $stmt);
-                    
-                    // Clean up double commas
-                    $stmt = preg_replace('/,\s*,/', ',', $stmt);
-                    
-                    // Ensure IF NOT EXISTS
-                    if (stripos($stmt, 'IF NOT EXISTS') === false) {
-                        $stmt = preg_replace('/CREATE\s+TABLE\s+/i', 'CREATE TABLE IF NOT EXISTS ', $stmt, 1);
-                    }
-                }
+    // ========== 🔒 SECURITY LAYER 2: TABLE NAME WHITELIST ==========
+    $table_name = null;
+    
+    // Extract table name dari CREATE TABLE
+    if (preg_match('/CREATE\s+TABLE\s+(? :IF\s+NOT\s+EXISTS\s+)?`?([^`\s(]+)`?/i', $stmt, $m)) {
+        $table_name = $m[1];
+    }
+    
+    // Extract table name dari INSERT INTO
+    if (preg_match('/INSERT\s+INTO\s+`?([^`\s(]+)`?/i', $stmt, $m2)) {
+        $table_name = $m2[1];
+    }
 
-                // ========== HANDLE INSERT ==========
-                if (stripos($stmt, 'INSERT INTO') !== false) {
-                    // Verify target table exists
-                    if (preg_match('/INSERT\s+INTO\s+`?([^`\s(]+)`?/i', $stmt, $m2)) {
-                        $tbl_ins = $m2[1];
-                        $exists2 = $wpdb->get_var($wpdb->prepare(
-                            "SHOW TABLES LIKE %s", 
-                            $wpdb->esc_like($tbl_ins)
-                        ));
-                        
-                        if (empty($exists2)) {
-                            $skipped++;
-                            $errors[] = "Skipping INSERT into missing table: {$tbl_ins}";
-                            error_log("PURI Import: Table not found for INSERT: {$tbl_ins}");
-                            continue;
-                        }
-                    }
-                }
+    // Validasi table name (HARUS punya prefix 'puri_' atau 'wp_puri_')
+    if ($table_name !== null) {
+        $clean_name = str_replace($wpdb->prefix, '', $table_name);
+        
+        if (strpos($clean_name, 'puri_') !== 0) {
+            $skipped++;
+            error_log("PURI Import BLOCKED (unauthorized table): {$table_name}");
+            $errors[] = "Unauthorized table name: {$table_name}";
+            continue; // SKIP statement ini
+        }
+    }
 
-                // ========== EXECUTE STATEMENT ==========
-                $res = $wpdb->query($stmt . ';');
-                
-                if ($res === false) {
-                    $err = $wpdb->last_error;
-                    $short_stmt = substr($stmt, 0, 200);
-                    
-                    // ✅ CRITICAL: Determine if error is fatal
-                    $is_fatal = true;
-                    
-                    // Non-fatal errors to ignore
-                    if (stripos($err, 'Duplicate entry') !== false) {
-                        $is_fatal = false;
-                        $skipped++;
-                    } elseif (stripos($err, 'already exists') !== false) {
-                        $is_fatal = false;
-                        $skipped++;
-                    }
-                    
-                    if ($is_fatal) {
-                        error_log("PURI Import FATAL: {$err} | stmt: {$short_stmt}");
-                        throw new Exception("SQL execution failed: {$err}");
-                    } else {
-                        error_log("PURI Import WARNING (skipped): {$err}");
-                        $errors[] = "Warning: {$err}";
-                    }
-                } else {
-                    $processed++;
-                }
+    // ========== HANDLE CREATE TABLE ==========
+    if (stripos($stmt, 'CREATE TABLE') !== false) {
+        // Extract table name
+        if (preg_match('/CREATE\s+TABLE\s+(?: IF\s+NOT\s+EXISTS\s+)?`?([^`\s(]+)`?/i', $stmt, $m)) {
+            $tbl = $m[1];
+            
+            // Check if table exists
+            $exists = $wpdb->get_var($wpdb->prepare(
+                "SHOW TABLES LIKE %s", 
+                $wpdb->esc_like($tbl)
+            ));
+            
+            if (!empty($exists)) {
+                $skipped++;
+                error_log("PURI Import:  Skipping CREATE - table exists: {$tbl}");
+                continue;
             }
+        }
+
+        // ✅ FIX: Remove CHECK constraints (MySQL 5.7 compatibility)
+        $stmt = preg_replace('/,?\s*CONSTRAINT\s+`?[\w\-]+`?\s+CHECK\s*\([^\)]*\)/i', '', $stmt);
+        $stmt = preg_replace('/,?\s*CHECK\s*\([^\)]*\)/i', '', $stmt);
+        
+        // Clean up double commas
+        $stmt = preg_replace('/,\s*,/', ',', $stmt);
+        
+        // Ensure IF NOT EXISTS
+        if (stripos($stmt, 'IF NOT EXISTS') === false) {
+            $stmt = preg_replace('/CREATE\s+TABLE\s+/i', 'CREATE TABLE IF NOT EXISTS ', $stmt, 1);
+        }
+    }
+
+    // ========== HANDLE INSERT ==========
+    if (stripos($stmt, 'INSERT INTO') !== false) {
+        // Verify target table exists
+        if (preg_match('/INSERT\s+INTO\s+`?([^`\s(]+)`?/i', $stmt, $m2)) {
+            $tbl_ins = $m2[1];
+            $exists2 = $wpdb->get_var($wpdb->prepare(
+                "SHOW TABLES LIKE %s", 
+                $wpdb->esc_like($tbl_ins)
+            ));
+            
+            if (empty($exists2)) {
+                $skipped++;
+                $errors[] = "Skipping INSERT into missing table: {$tbl_ins}";
+                error_log("PURI Import:  Table not found for INSERT: {$tbl_ins}");
+                continue;
+            }
+        }
+    }
+
+    // ========== EXECUTE STATEMENT (SETELAH LOLOS VALIDASI) ==========
+    $res = $wpdb->query($stmt . ';');
+    
+    if ($res === false) {
+        $err = $wpdb->last_error;
+        $short_stmt = substr($stmt, 0, 200);
+        
+        // Determine if error is fatal
+        $is_fatal = true;
+        
+        // Non-fatal errors to ignore
+        if (stripos($err, 'Duplicate entry') !== false) {
+            $is_fatal = false;
+            $skipped++;
+        } elseif (stripos($err, 'already exists') !== false) {
+            $is_fatal = false;
+            $skipped++;
+        }
+        
+        if ($is_fatal) {
+            error_log("PURI Import FATAL: {$err} | stmt: {$short_stmt}");
+            throw new Exception("SQL execution failed: {$err}");
+        } else {
+            error_log("PURI Import WARNING (skipped): {$err}");
+            $errors[] = "Warning: {$err}";
+        }
+    } else {
+        $processed++;
+    }
+}
             
             error_log("PURI Import: SQL processed={$processed}, skipped={$skipped}");
         }

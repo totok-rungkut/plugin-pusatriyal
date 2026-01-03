@@ -12,7 +12,7 @@
  * Security & Improvements:
  *  - Uses $wpdb->prepare for SQL where necessary
  *  - Ensures dbDelta table names use $wpdb->prefix consistently via puri_table_name()
- *  - Adds puri_core_db_install_v601 wrapper to run only for admins; idempotent
+ *  - Adds puri_core_db_install wrapper to run only for admins; idempotent
  *  - Adds check for JSON column.compatibility (MySQL >= 5.7)
  */
 
@@ -26,8 +26,9 @@ if (!defined('T_STOCK'))   define('T_STOCK',   'puri_inventory_balance');
 if (!defined('T_LEDGER'))  define('T_LEDGER',  'puri_inventory_ledger');
 if (!defined('T_CHART'))   define('T_CHART',   'puri_acct_chart');
 if (!defined('T_JOURNAL')) define('T_JOURNAL', 'puri_acct_journal');
-if (!defined('T_CONSIGN')) define('T_CONSIGN', 'puri_inventory_consign');
-if (!defined('T_LOCKS'))   define('T_LOCKS',   'puri_inventory_locks');
+if (!defined('T_CONSIGN')) define('T_CONSIGN', 'puri_inventory_consign'); // untuk mc-09
+if (!defined('T_LOCKS'))   define('T_LOCKS',   'puri_inventory_locks'); 
+if (!defined('T_ORDERS'))  define('T_ORDERS',  'puri_orders'); // untuk mc-07
 
 // Ensure puri_table_name helper exists (from mc-00) fallback
 if (!function_exists('puri_table_name')) {
@@ -51,7 +52,7 @@ add_action('acf/init', function() {
     acf_add_options_sub_page([
         'page_title'    => 'Profil Perusahaan & Bank',
         'menu_title'    => '🏨 Profil & Bank',
-        'parent_slug'   => 'pr-dashboard',
+        'parent_slug'   => 'puri-master',
         'menu_slug'     => 'puri-profile',
         'capability'    => 'manage_options',
         'redirect'      => false,
@@ -103,7 +104,7 @@ function puri_render_profile_page_dummy() {
  * - Uses dbDelta (wp-admin/includes/upgrade.php)
  * - Ensures idempotency
  */
-function puri_core_db_install_v601() {
+function puri_core_db_install() {
     // Only run for admins in admin area
     if (!is_admin() || !current_user_can('manage_options')) return;
 
@@ -191,15 +192,15 @@ function puri_core_db_install_v601() {
     dbDelta($sql_chart);
 
     // Auto-seed CoA
-    puri_seed_coa_v601();
+    puri_seed_coa();
 }
-add_action('admin_init', 'puri_core_db_install_v601', 5);
+add_action('admin_init', 'puri_core_db_install', 5);
 
 /**
  * Auto-seeding Chart of Accounts (CoA)
  * Idempotent: uses REPLACE to avoid duplicates
  */
-function puri_seed_coa_v601() {
+function puri_seed_coa() {
     global $wpdb;
     $table = puri_table_name('T_CHART');
     if (empty($table)) return;
