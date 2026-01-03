@@ -485,7 +485,7 @@ if (!class_exists('PURI_Engine_V6')) {
             
             // Log untuk debugging (hanya jika WP_DEBUG aktif)
             $this->log_debug('calculate_moving_avg', sprintf(
-                'Item #%d:  old_stock=%.2f, old_price=%.4f, qty_in=%.2f, price_new=%.4f → new_avg=%. 4f',
+                'Item #%d:  old_stock=%.2f, old_price=%.4f, qty_in=%.2f, price_new=%.4f → new_avg=%.4f',
                 $item_id, $old_stock, $old_price, $qty_in, $price_new, $new_avg
             ));
             

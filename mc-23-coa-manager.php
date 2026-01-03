@@ -1,4 +1,4 @@
-<? php
+<?php
 /**
  * =============================================================================
  * MC 23 - Chart of Accounts (CoA) Manager
@@ -132,7 +132,7 @@ function puri_render_coa_manager_page() {
         <div class="proc-card" style="background:#fff; padding:20px; border: 1px solid #ccd0d4; border-radius: 8px; margin-bottom:20px;">
             <h3>Tambah / Edit Akun</h3>
             <form method="post" style="display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap;">
-                <? php wp_nonce_field('puri_coa_save', 'puri_coa_nonce'); ?>
+                <?php wp_nonce_field('puri_coa_save', 'puri_coa_nonce'); ?>
                 <div>Kode Akun: <br><input type="text" name="code" required placeholder="Mis:  1101"></div>
                 <div>Nama Akun: <br><input type="text" name="name" required placeholder="Mis: Kas Laci"></div>
                 <div>Tipe Akun: <br>
@@ -162,7 +162,7 @@ function puri_render_coa_manager_page() {
                 <?php if (empty($charts)) : ?>
                     <tr><td colspan="5" style="text-align:center;">Belum ada data CoA. </td></tr>
                 <?php else :  ?>
-                    <? php foreach($charts as $c): 
+                    <?php foreach($charts as $c): 
                         // ✅ FIX: Generate nonce untuk setiap delete link
                         $delete_nonce = wp_create_nonce('puri_coa_delete_' .  $c->code);
                         $delete_url = add_query_arg([
@@ -173,7 +173,7 @@ function puri_render_coa_manager_page() {
                     ?>
                     <tr>
                         <td><code><?php echo esc_html($c->code); ?></code></td>
-                        <td><strong><? php echo esc_html($c->name); ?></strong></td>
+                        <td><strong><?php echo esc_html($c->name); ?></strong></td>
                         <td><?php echo esc_html($c->type); ?></td>
                         <td><?php echo $c->is_cash ? '✅ Kas/Bank' : '-'; ?></td>
                         <td>
@@ -184,7 +184,7 @@ function puri_render_coa_manager_page() {
                         </td>
                     </tr>
                     <?php endforeach; ?>
-                <? php endif; ?>
+                <?php endif; ?>
             </tbody>
         </table>
     </div>
