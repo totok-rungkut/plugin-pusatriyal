@@ -139,8 +139,10 @@ function puri_render_procurement_page() {
             .proc-summary { background: #f8fafc; padding: 12px; border-radius: 6px; margin:  12px 0; }
             .proc-summary-row { display:  flex; justify-content: space-between; padding: 6px 0; }
             .proc-summary-row.total { font-weight: 900; font-size: 18px; border-top: 2px solid #0f172a; padding-top: 10px; margin-top: 8px; }
-            .proc-summary-row.selisih { color: #ef4444; font-weight: 700; }
-            .proc-summary-row.selisih.zero { color: #10b981; }
+            .proc-summary-row.selisih { color: #ef4444; font-weight: 700; font-size: 0.7rem;}
+            .proc-summary-row.selisih.lebih { color: #df44ef; font-weight: 700; font-size: 0.7rem;}
+            .proc-summary-row.selisih.kurang { color: #ef4444; font-weight: 700; font-size: 0.7rem;}
+            .proc-summary-row.selisih.zero { color: #10f991; }
             .btn-submit { width: 100%; padding: 12px; background:  #059669; color: #fff; border: none; border-radius: 6px; font-weight: 900; cursor: pointer; font-size: 16px; }
             .btn-submit:disabled { background: #cbd5e1; cursor: not-allowed; }
             .btn-submit.processing { background: #6b7280; }
@@ -569,9 +571,9 @@ function puri_render_procurement_page() {
                 selisihRow.classList.add('selisih');
                 
                 if (selisih > 0) {
-                    selisihEl.textContent = 'Rp ' + formatNumber(selisih) + ' (LEBIH)';
+                    selisihEl.textContent = '(lebih) ' + 'Rp ' + formatNumber(selisih) ;
                 } else if (selisih < 0) {
-                    selisihEl.textContent = 'Rp ' + formatNumber(Math.abs(selisih)) + ' (KURANG)';
+                    selisihEl.textContent = '(kurang) ' + 'Rp ' + formatNumber(Math.abs(selisih)) ;
                 }
             }
 
@@ -860,7 +862,7 @@ function puri_handle_procurement_submit() {
 
 		// Format:  Kulakan [TR-01] - Bank of Dubai : SAR 5 (1.500 riyal @4.210) ; SAR 20 (2.300 riyal @4.210)
 		$journal_desc = sprintf(
-			'Kulakan [%s] - %s : %s',
+			'Kulakan %s [%s] : %s',
 			$vendor_code,                        // Kode vendor:  TR-01
 			$vendor_name,                        // Nama vendor: Bank of Dubai
 			implode(' ; ', $desc_items)          // Items dipisah dengan " ; "
