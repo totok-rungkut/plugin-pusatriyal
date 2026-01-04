@@ -84,6 +84,8 @@ function puri_render_procurement_page() {
         <style>
             .proc-container { display: grid; grid-template-columns: 220px 1fr 380px; gap: 20px; margin-top: 20px; }
             .proc-panel { background: #fff; border: 1px solid #d1d5db; border-radius: 8px; padding: 16px; }
+            .proc-panel:last-child { display:flex; flex-direction:column; }
+            .proc-panel:last-child div:last-child { margin-top:auto; }
             .proc-listbox { width: 100%; height: 400px; border: 1px solid #cbd5e1; border-radius:  4px; }
             .proc-tabs { display: flex; gap: 8px; margin-bottom: 16px; border-bottom: 2px solid #e5e7eb; padding-bottom: 8px; }
             .proc-tab { padding: 8px 16px; background: #f1f5f9; border: none; cursor: pointer; border-radius: 4px 4px 0 0; font-weight: 600; }
@@ -109,15 +111,15 @@ function puri_render_procurement_page() {
             .btn-remove { color: #ef4444; border: 1px solid #ef4444; background: #fff; cursor: pointer; border-radius: 4px; font-weight: bold; padding: 4px 10px; }
             .btn-remove:hover { background: #fef2f2; }
             
-            .proc-payment-row { display: grid; grid-template-columns: 1fr 140px 50px; gap: 8px; align-items: center; margin-bottom: 8px; }
+            .proc-payment-row { display: grid; grid-template-columns: 1fr 120px 30px; gap: 5px; align-items: center; margin-bottom: 8px; }
             .proc-payment-row select, .proc-payment-row input { padding: 6px; border:  1px solid #cbd5e1; border-radius: 4px; }
             .proc-payment-row input { text-align: right; font-weight: 700; }
             
             .proc-summary { background: #f8fafc; padding: 12px; border-radius: 6px; margin:  12px 0; }
             .proc-summary-row { display: flex; justify-content: space-between; padding: 6px 0; }
             .proc-summary-row.total { font-weight: 900; font-size: 18px; border-top: 2px solid #0f172a; padding-top:  10px; margin-top: 8px; }
-            .proc-summary-row.selisih { color: #ef4444; font-weight: 700; }
-            .proc-summary-row.selisih.zero { color: #10b981; }
+            .proc-summary-row.selisih { color: #ef4444; font-size: 0.7rem; }
+            .proc-summary-row.zero { color: #10ad93; font-size: 1.2rem; font-weight:600;}
             
             .btn-submit { width: 100%; padding: 12px; background: #059669; color: #fff; border: none; border-radius: 6px; font-weight: 900; cursor: pointer; font-size: 16px; }
             .btn-submit:hover: not(:disabled) { background: #047857; }
@@ -194,16 +196,16 @@ function puri_render_procurement_page() {
 
                     <div class="proc-summary" style="margin-top: 16px">
                         <div class="proc-summary-row">
-                            <span>Total Dibayar</span>
+                            <span>Total Pembayaran</span>
                             <span>Rp <span id="total_bayar">0</span></span>
                         </div>
                         <div class="proc-summary-row selisih" id="selisih_row">
-                            <span>Selisih</span>
+                            <span id="selisih_label">Selisih</span>
                             <span id="selisih_amount">Rp 0</span>
                         </div>
                     </div>
                     
-                    <div style="margin-top: 12px; padding: 10px; background: #fef3c7; border-radius: 6px; font-size: 12px;">
+                    <div id="attention" style="padding: 10px; background: #fef3c7; border-radius: 6px; font-size: 12px;">
                         <strong>⚠️ Penting:</strong> Total pembayaran harus sama dengan total pembelian. 
                     </div>
                 </div>
@@ -264,6 +266,8 @@ function puri_render_procurement_page() {
         var totalBayarEl = document.getElementById('total_bayar');
         var selisihEl = document.getElementById('selisih_amount');
         var selisihRow = document.getElementById('selisih_row');
+		var selisihLabel = document.getElementById('selisih_label');
+		var attentionEl = document.getElementById('attention');
         var submitBtn = document.getElementById('btn_submit');
         var confirmChk = document.getElementById('confirm_data');
         var procForm = document.getElementById('proc_form');
@@ -575,10 +579,15 @@ function assignTabIndexes() {
                 selisihRow.classList.add('zero');
                 selisihRow.classList.remove('selisih');
                 selisihEl.textContent = 'Rp 0 ✓';
+				selisihLabel.textContent = 'Klop';
+				attentionEl.style.display = "none";
                 submitBtn.disabled = !(confirmChk.checked && vendorListbox.value !== '');
             } else {
                 selisihRow.classList.remove('zero');
                 selisihRow.classList.add('selisih');
+				selisihLabel.textContent = 'Selisih';
+				attentionEl.style.display = "block";
+
                 if (diff > 0) {
                     selisihEl.textContent = '(lebih) Rp ' + formatNumber(diff);
                 } else if (diff < 0) {
@@ -616,7 +625,6 @@ function assignTabIndexes() {
         // ═══════════════════════════════════════════════════════════════
         
         buildRow();
-        buildPaymentRow();
         buildPaymentRow();
         setMode('nominal');
 
