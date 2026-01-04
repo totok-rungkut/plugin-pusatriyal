@@ -6,18 +6,31 @@
  * 
  * @package     Pusat Riyal
  * @module      MC-04
- * @version     6.0.7
+ * @version     6.0.8
  * @author      Denmas Totok (refactor by Copilot)
- * @updated     2026-01-03
+ * @updated     2026-01-04
+ * 
+ * =============================================================================
+ * FEATURES
+ * =============================================================================
+ * 
+ *   [1] Dual input mode:  By Nominal / By Quantity
+ *   [2] Dynamic column order & width via CSS class
+ *   [3] Multi-source payment (Kas Laci + Bank)
+ *   [4] Real-time balance validation
+ *   [5] Auto-calculate:  Total IDR = Total SAR × Kurs
+ *   [6] Submit enabled only when balanced & confirmed
  * 
  * =============================================================================
  * CHANGELOG
  * =============================================================================
  * 
- * [6.0.7] 2026-01-03
- *   - Fixed: Form structure - payment inputs sekarang di dalam form
- *   - Fixed: parseNumber() untuk handle format angka Indonesia
- *   - Fixed:  Syntax error spasi di tag PHP
+ * [6.0.8] 2026-01-04
+ *   - Merged: CSS order swap + grid-template-columns per mode
+ *   - Fixed:  Tab switching dengan onclick
+ *   - Fixed: Column wrapper (.col-sku, .col-qty, etc)
+ *   - Fixed: Enable/disable logic per mode
+ *   - Maintained: Original calculation logic
  * 
  * =============================================================================
  */
@@ -37,48 +50,6 @@ add_action('admin_menu', function() {
         'puri_render_procurement_page'
     );
 }, 20);
-
-/**
- * AJAX Handler
- */
-add_action('wp_ajax_puri_get_procurement_data', 'puri_get_procurement_data_handler');
-
-function puri_get_procurement_data_handler() {
-    check_ajax_referer('puri_admin_action', 'puri_admin_nonce');
-    
-    if (!current_user_can('manage_options')) {
-        wp_send_json_error('Unauthorized', 403);
-    }
-    
-    global $wpdb;
-    
-    $items_table = puri_table_name('T_ITEMS');
-    $items = $wpdb->get_results(
-        "SELECT id, sku, name, denom_value, base_price 
-         FROM {$items_table} 
-         WHERE type = 'currency' 
-         ORDER BY denom_value ASC"
-    );
-    
-    $vendors = get_posts([
-        'post_type'      => 'pr_vendor',
-        'posts_per_page' => -1,
-        'post_status'    => 'publish',
-        'orderby'        => 'title',
-        'order'          => 'ASC'
-    ]);
-    
-    $chart_table = puri_table_name('T_CHART');
-    $banks = $wpdb->get_results(
-        "SELECT code, name FROM {$chart_table} WHERE is_cash = 1 ORDER BY code ASC"
-    );
-    
-    wp_send_json_success([
-        'items'   => $items,
-        'vendors' => $vendors,
-        'banks'   => $banks
-    ]);
-}
 
 /**
  * Render Procurement Page
@@ -121,33 +92,207 @@ function puri_render_procurement_page() {
         <h1>📦 Form Kulakan / Pembelian Stok</h1>
 
         <style>
-            .proc-container { display: grid; grid-template-columns: 220px 1fr 380px; gap: 20px; margin-top: 20px; }
-            .proc-panel { background: #fff; border: 1px solid #d1d5db; border-radius: 8px; padding: 16px; }
-            .proc-listbox { width: 100%; height: 400px; border: 1px solid #cbd5e1; border-radius:  4px; }
-            .proc-tabs { display: flex; gap: 8px; margin-bottom: 16px; border-bottom: 2px solid #e5e7eb; padding-bottom: 8px; }
-            .proc-tab { padding: 8px 16px; background: #f1f5f9; border:  none; cursor: pointer; border-radius: 4px 4px 0 0; font-weight: 600; }
-            .proc-tab.active { background: #7c3aed; color: #fff; }
-            .proc-row { display: grid; grid-template-columns: 140px 100px 100px 120px 140px 80px; gap: 8px; align-items: center; margin-bottom: 8px; }
-            .proc-row input, .proc-row select { padding: 6px; border: 1px solid #cbd5e1; border-radius:  4px; text-align: right; }
-            .proc-row select { text-align: left; }
-            .proc-row .readonly { background: #f8fafc; color: #64748b; }
-            .proc-row .btn-sm { padding: 4px 8px; font-size: 11px; cursor: pointer; border:  1px solid #cbd5e1; border-radius: 3px; background: #fff; }
-            .proc-row .btn-remove { color: #ef4444; border-color: #ef4444; }
-            .proc-payment-row { display: grid; grid-template-columns: 1fr 140px 60px; gap: 8px; align-items: center; margin-bottom: 8px; }
-            .proc-payment-row select, .proc-payment-row input { padding: 6px; border:  1px solid #cbd5e1; border-radius: 4px; }
-            .proc-payment-row input { text-align: right; font-weight: 700; }
-            .proc-summary { background: #f8fafc; padding: 12px; border-radius: 6px; margin:  12px 0; }
-            .proc-summary-row { display:  flex; justify-content: space-between; padding: 6px 0; }
-            .proc-summary-row.total { font-weight: 900; font-size: 18px; border-top: 2px solid #0f172a; padding-top: 10px; margin-top: 8px; }
-            .proc-summary-row.selisih { color: #ef4444; font-weight: 700; font-size: 0.7rem;}
-            .proc-summary-row.selisih.lebih { color: #df44ef; font-weight: 700; font-size: 0.7rem;}
-            .proc-summary-row.selisih.kurang { color: #ef4444; font-weight: 700; font-size: 0.7rem;}
-            .proc-summary-row.selisih.zero { color: #10f991; }
-            .btn-submit { width: 100%; padding: 12px; background:  #059669; color: #fff; border: none; border-radius: 6px; font-weight: 900; cursor: pointer; font-size: 16px; }
-            .btn-submit:disabled { background: #cbd5e1; cursor: not-allowed; }
-            .btn-submit.processing { background: #6b7280; }
-            .history-table { margin-top: 24px; }
-            .vendor-required { border-color: #ef4444 !important; }
+            /* ═══════════════════════════════════════════════════════════════
+               LAYOUT CONTAINER
+               ═══════════════════════════════════════════════════════════════ */
+            .proc-container { 
+                display: grid; 
+                grid-template-columns: 220px 1fr 380px; 
+                gap: 20px; 
+                margin-top: 20px; 
+            }
+            .proc-panel { 
+                background: #fff; 
+                border: 1px solid #d1d5db; 
+                border-radius: 8px; 
+                padding:  16px; 
+            }
+            .proc-listbox { 
+                width: 100%; 
+                height: 400px; 
+                border: 1px solid #cbd5e1; 
+                border-radius: 4px; 
+            }
+            
+            /* ═══════════════════════════════════════════════════════════════
+               TABS
+               ═══════════════════════════════════════════════════════════════ */
+            .proc-tabs { 
+                display: flex; 
+                gap: 8px; 
+                margin-bottom: 16px; 
+                border-bottom: 2px solid #e5e7eb; 
+                padding-bottom: 8px; 
+            }
+            .proc-tab { 
+                padding: 8px 16px; 
+                background: #f1f5f9; 
+                border: none; 
+                cursor: pointer; 
+                border-radius: 4px 4px 0 0; 
+                font-weight:  600; 
+            }
+            .proc-tab:hover { 
+                background: #e2e8f0; 
+            }
+            .proc-tab.active { 
+                background: #7c3aed; 
+                color: #fff; 
+            }
+            
+            /* ═══════════════════════════════════════════════════════════════
+               ITEM ROW - Base + Mode-specific Grid
+               ═══════════════════════════════════════════════════════════════ */
+            .proc-row { 
+                display: grid; 
+                grid-template-columns: 140px 120px 100px 100px 140px 50px; 
+                gap: 8px; 
+                align-items: center; 
+                margin-bottom: 8px; 
+            }
+            
+            /* Mode Nominal:  [Item 140] [TotalSAR 128] [Kurs 100] [Qty 75] [TotalIDR 140] [Action 50] */
+            .proc-row.nominal { 
+                grid-template-columns: 140px 110px 90px 75px 140px 50px; 
+            }
+            
+            /* Mode Quantity: [Item 140] [Qty 75] [Kurs 100] [TotalSAR 128] [TotalIDR 140] [Action 50] */
+            .proc-row.quantity { 
+                grid-template-columns: 140px 75px 90px 110px 140px 50px; 
+            }
+            
+            .proc-row input, .proc-row select { 
+                padding:  6px; 
+                border: 1px solid #cbd5e1; 
+                border-radius: 4px; 
+                text-align: right; 
+                width: 100%; 
+                box-sizing: border-box; 
+            }
+            .proc-row select { 
+                text-align: left; 
+            }
+            .proc-row .readonly { 
+                background: #f8fafc; 
+                color: #64748b; 
+                border-color: #e2e8f0; 
+            }
+            
+            /* ═══════════════════════════════════════════════════════════════
+               COLUMN ORDER - CSS Flexbox Order untuk Swap
+               ═══════════════════════════════════════════════════════════════ */
+            .col-sku    { order: 1; }
+            .col-riyal  { order: 2; }
+            .col-kurs   { order: 3; }
+            .col-qty    { order: 4; }
+            .col-idr    { order: 5; }
+            .col-action { order: 6; }
+
+            /* Mode Quantity: Swap Qty (order 2) dan Riyal (order 4) */
+            .proc-row.quantity .col-qty   { order: 2; }
+            .proc-row.quantity .col-riyal { order: 4; }
+            
+            /* ═══════════════════════════════════════════════════════════════
+               BUTTONS
+               ═══════════════════════════════════════════════════════════════ */
+            .btn-remove { 
+                color: #ef4444; 
+                border: 1px solid #ef4444; 
+                background: #fff; 
+                cursor: pointer; 
+                border-radius: 4px; 
+                font-weight: bold; 
+                padding: 4px 10px;
+                font-size: 14px;
+            }
+            .btn-remove:hover {
+                background: #fef2f2;
+            }
+            
+            /* ═══════════════════════════════════════════════════════════════
+               PAYMENT ROW
+               ═══════════════════════════════════════════════════════════════ */
+            .proc-payment-row { 
+                display: grid; 
+                grid-template-columns:  1fr 140px 50px; 
+                gap: 8px; 
+                align-items: center; 
+                margin-bottom: 8px; 
+            }
+            .proc-payment-row select, 
+            .proc-payment-row input { 
+                padding: 6px; 
+                border:  1px solid #cbd5e1; 
+                border-radius: 4px; 
+            }
+            .proc-payment-row input { 
+                text-align: right; 
+                font-weight: 700; 
+            }
+            
+            /* ═══════════════════════════════════════════════════════════════
+               SUMMARY
+               ═══════════════════════════════════════════════════════════════ */
+            .proc-summary { 
+                background: #f8fafc; 
+                padding: 12px; 
+                border-radius: 6px; 
+                margin: 12px 0; 
+            }
+            .proc-summary-row { 
+                display: flex; 
+                justify-content: space-between; 
+                padding:  6px 0; 
+            }
+            .proc-summary-row.total { 
+                font-weight: 900; 
+                font-size: 18px; 
+                border-top: 2px solid #0f172a; 
+                padding-top: 10px; 
+                margin-top: 8px; 
+            }
+            .proc-summary-row.selisih { 
+                color: #ef4444; 
+                font-weight: 700; 
+            }
+            .proc-summary-row.selisih.zero { 
+                color: #10b981; 
+            }
+            
+            /* ═══════════════════════════════════════════════════════════════
+               SUBMIT BUTTON
+               ═══════════════════════════════════════════════════════════════ */
+            .btn-submit { 
+                width: 100%; 
+                padding: 12px; 
+                background: #059669; 
+                color: #fff; 
+                border: none; 
+                border-radius: 6px; 
+                font-weight:  900; 
+                cursor:  pointer; 
+                font-size: 16px; 
+            }
+            .btn-submit:hover: not(:disabled) {
+                background: #047857;
+            }
+            .btn-submit:disabled { 
+                background: #cbd5e1; 
+                cursor:  not-allowed; 
+            }
+            .btn-submit.processing { 
+                background: #6b7280; 
+            }
+            
+            /* ═══════════════════════════════════════════════════════════════
+               MISC
+               ═══════════════════════════════════════════════════════════════ */
+            .history-table { 
+                margin-top: 24px; 
+            }
+            .vendor-required { 
+                border-color: #ef4444 ! important; 
+            }
         </style>
 
         <!-- FORM MENCAKUP SEMUA PANEL -->
@@ -158,7 +303,10 @@ function puri_render_procurement_page() {
             <input type="hidden" name="vendor_id" id="vendor_id_hidden" value="">
 
             <div class="proc-container">
-                <!-- Panel 1: Vendor List -->
+                
+                <!-- ═══════════════════════════════════════════════════════════
+                     PANEL 1: VENDOR LIST
+                     ═══════════════════════════════════════════════════════════ -->
                 <div class="proc-panel">
                     <h3 style="margin-top: 0">Vendor / Supplier <span style="color:#ef4444">*</span></h3>
                     <select id="vendor_listbox" class="proc-listbox" size="20">
@@ -167,37 +315,42 @@ function puri_render_procurement_page() {
                             <option value="<?php echo esc_attr($v->ID); ?>"><?php echo esc_html($v->post_title); ?></option>
                         <?php endforeach; ?>
                     </select>
-                    <p style="margin-top: 8px; color:#6b7280; font-size: 12px;">
+                    <p style="margin-top: 8px; color:#6b7280; font-size:  12px;">
                         <a href="<?php echo esc_url(admin_url('post-new.php?post_type=pr_vendor')); ?>" target="_blank">+ Tambah Vendor Baru</a>
                     </p>
                 </div>
 
-                <!-- Panel 2: Detail Transaksi -->
+                <!-- ═══════════════════════════════════════════════════════════
+                     PANEL 2: DETAIL TRANSAKSI
+                     ═══════════════════════════════════════════════════════════ -->
                 <div class="proc-panel">
-                    <div style="display: flex; justify-content: space-between; margin-bottom:12px">
-                        <h2 style="margin: 0">Detail Transaksi</h2>
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 12px">
+                        <h2 style="margin:  0">Detail Transaksi</h2>
                         <div style="color:#6b7280"><?php echo esc_html(date_i18n('l, d F Y')); ?></div>
                     </div>
 
+                    <!-- TABS -->
                     <div class="proc-tabs">
                         <button type="button" class="proc-tab active" id="tab_nominal">By Nominal</button>
                         <button type="button" class="proc-tab" id="tab_qty">By Quantity</button>
                     </div>
 
-                    <!-- Header Row -->
-                    <div class="proc-row" style="font-weight:700; background:#f1f5f9; padding:8px 4px; border-radius:4px;">
-                        <div>Item</div>
-                        <div style="text-align:right">Qty (pcs)</div>
-                        <div style="text-align:  right">Kurs Beli</div>
-                        <div style="text-align: right">Total SAR</div>
-                        <div style="text-align:right">Total IDR</div>
-                        <div></div>
+                    <!-- HEADER ROW -->
+                    <div id="header_row" class="proc-row nominal" style="font-weight: 700; background:#f1f5f9; padding: 8px 4px; border-radius: 4px;">
+                        <div class="col-sku">Item</div>
+                        <div class="col-riyal" style="text-align: right">Total SAR</div>
+                        <div class="col-kurs" style="text-align: right">Kurs Beli</div>
+                        <div class="col-qty" style="text-align: right">Qty (pcs)</div>
+                        <div class="col-idr" style="text-align: right">Total IDR</div>
+                        <div class="col-action"></div>
                     </div>
 
+                    <!-- DATA ROWS CONTAINER -->
                     <div id="proc_rows"></div>
 
-                    <button type="button" id="btn_add_row" class="button" style="margin-top:8px">+ Tambah Item</button>
+                    <button type="button" id="btn_add_row" class="button" style="margin-top: 8px">+ Tambah Item</button>
 
+                    <!-- SUMMARY -->
                     <div class="proc-summary">
                         <div class="proc-summary-row total">
                             <span>Total Pembelian</span>
@@ -205,25 +358,29 @@ function puri_render_procurement_page() {
                         </div>
                     </div>
 
-                    <div style="display:flex; align-items:center; gap:8px; margin: 12px 0">
+                    <!-- CONFIRM -->
+                    <div style="display: flex; align-items: center; gap: 8px; margin:  12px 0">
                         <input type="checkbox" id="confirm_data" name="confirm_ok" value="1">
-                        <label for="confirm_data" style="font-weight:600">Data sudah benar dan siap diproses</label>
+                        <label for="confirm_data" style="font-weight: 600">Data sudah benar dan siap diproses</label>
                     </div>
 
+                    <!-- SUBMIT -->
                     <button type="submit" id="btn_submit" class="btn-submit" disabled>
                         SUBMIT PEMBELIAN
                     </button>
                 </div>
 
-                <!-- Panel 3: Sumber Pembayaran - DI DALAM FORM -->
+                <!-- ═══════════════════════════════════════════════════════════
+                     PANEL 3: SUMBER PEMBAYARAN
+                     ═══════════════════════════════════════════════════════════ -->
                 <div class="proc-panel">
                     <h3 style="margin-top: 0">Sumber Pembayaran <span style="color:#ef4444">*</span></h3>
                     
                     <div id="payment_sources"></div>
 
-                    <button type="button" id="btn_add_payment" class="button" style="width:100%; margin-top:8px">+ Tambah Sumber</button>
+                    <button type="button" id="btn_add_payment" class="button" style="width: 100%; margin-top: 8px">+ Tambah Sumber</button>
 
-                    <div class="proc-summary" style="margin-top:16px">
+                    <div class="proc-summary" style="margin-top: 16px">
                         <div class="proc-summary-row">
                             <span>Total Dibayar</span>
                             <span>Rp <span id="total_bayar">0</span></span>
@@ -234,468 +391,467 @@ function puri_render_procurement_page() {
                         </div>
                     </div>
                     
-                    <div style="margin-top:12px; padding: 10px; background:#fef3c7; border-radius:6px; font-size:12px;">
-                        <strong>⚠️ Penting:</strong> Total pembayaran harus sama dengan total pembelian.
+                    <div style="margin-top: 12px; padding: 10px; background: #fef3c7; border-radius: 6px; font-size: 12px;">
+                        <strong>⚠️ Penting: </strong> Total pembayaran harus sama dengan total pembelian. 
                     </div>
                 </div>
             </div>
         </form>
 
-
-		<!-- History (di luar form) -->
-		<div class="proc-panel history-table">
-			<h3>📋 Riwayat Pembelian Bulan Ini</h3>
-			<?php
-			$journal_table = puri_table_name('T_JOURNAL');
-			$current_month = date_i18n('Y-m');
-			
-			$hist = $wpdb->get_results($wpdb->prepare("
-				SELECT ref_id, MIN(trx_date) as trx_date, MIN(description) as description, 
-					   SUM(debit) as total_debit
-				FROM {$journal_table}
-				WHERE account_code = '1401' 
-				  AND DATE_FORMAT(trx_date, '%%Y-%%m') = %s
-				  AND ref_id LIKE 'PRO-%%'
-				GROUP BY ref_id
-				ORDER BY MIN(trx_date) DESC
-				LIMIT 10
-			", $current_month));
-			?>
-			<table class="widefat striped" style="table-layout: fixed; width: 100%;">
-				<thead>
-					<tr>
-						<th style="width: 140px;">Tanggal</th>
-						<th style="width: 160px;">Kode Ref</th>
-						<th>Deskripsi</th>
-						<th style="width:  150px; text-align: right;">Total (IDR)</th>
-					</tr>
-				</thead>
-				<tbody>
-					<?php if (empty($hist)): ?>
-						<tr>
-							<td colspan="4" style="text-align: center; color: #6b7280; padding: 20px;">
-								Belum ada pembelian bulan ini. 
-							</td>
-						</tr>
-					<?php else: ?>
-						<?php foreach ($hist as $h): ?>
-						<tr>
-							<td style="vertical-align: top;"><?php echo esc_html(date_i18n('d M Y, H: i', strtotime($h->trx_date))); ?></td>
-							<td style="vertical-align: top;"><code><?php echo esc_html($h->ref_id); ?></code></td>
-							<td style="word-wrap: break-word; white-space: normal; vertical-align: top;">
-								<?php echo esc_html($h->description); ?>
-							</td>
-							<td style="text-align: right; font-weight: 700; vertical-align: top;">
-								Rp <?php echo number_format_i18n($h->total_debit); ?>
-							</td>
-						</tr>
-						<?php endforeach; ?>
-					<?php endif; ?>
-				</tbody>
-			</table>
-		</div>
-
+        <!-- ═══════════════════════════════════════════════════════════════════
+             HISTORY TABLE
+             ═══════════════════════════════════════════════════════════════════ -->
+        <div class="proc-panel history-table">
+            <h3>📋 Riwayat Pembelian Bulan Ini</h3>
+            <?php
+            $journal_table = puri_table_name('T_JOURNAL');
+            $current_month = date_i18n('Y-m');
+            
+            $hist = $wpdb->get_results($wpdb->prepare("
+                SELECT ref_id, MIN(trx_date) as trx_date, MIN(description) as description, 
+                       SUM(debit) as total_debit
+                FROM {$journal_table}
+                WHERE account_code = '1401' 
+                  AND DATE_FORMAT(trx_date, '%%Y-%%m') = %s
+                  AND ref_id LIKE 'PRO-%%'
+                GROUP BY ref_id
+                ORDER BY MIN(trx_date) DESC
+                LIMIT 10
+            ", $current_month));
+            ?>
+            <table class="widefat striped" style="table-layout: fixed; width: 100%;">
+                <thead>
+                    <tr>
+                        <th style="width: 140px;">Tanggal</th>
+                        <th style="width: 160px;">Kode Ref</th>
+                        <th>Deskripsi</th>
+                        <th style="width: 150px; text-align: right;">Total (IDR)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php if (empty($hist)): ?>
+                        <tr>
+                            <td colspan="4" style="text-align: center; color:  #6b7280; padding: 20px;">
+                                Belum ada pembelian bulan ini. 
+                            </td>
+                        </tr>
+                    <?php else: ?>
+                        <?php foreach ($hist as $h): ?>
+                        <tr>
+                            <td style="vertical-align: top;"><?php echo esc_html(date_i18n('d M Y, H:i', strtotime($h->trx_date))); ?></td>
+                            <td style="vertical-align: top;"><code><?php echo esc_html($h->ref_id); ?></code></td>
+                            <td style="word-wrap: break-word; white-space: normal; vertical-align: top;">
+                                <?php echo esc_html($h->description); ?>
+                            </td>
+                            <td style="text-align: right; font-weight: 700; vertical-align: top;">
+                                Rp <?php echo number_format_i18n($h->total_debit); ?>
+                            </td>
+                        </tr>
+                        <?php endforeach; ?>
+                    <?php endif; ?>
+                </tbody>
+            </table>
+        </div>
     </div>
 
+    <!-- ═══════════════════════════════════════════════════════════════════════
+         JAVASCRIPT
+         ═══════════════════════════════════════════════════════════════════════ -->
     <script>
     (function(){
         'use strict';
+
+        // ═══════════════════════════════════════════════════════════════
+        // DATA FROM PHP
+        // ═══════════════════════════════════════════════════════════════
         
-        // Data dari PHP
-        const items = <?php echo wp_json_encode(array_map(function($item) {
+        var items = <?php echo wp_json_encode(array_map(function($item) {
             return [
                 'id'          => intval($item->id),
-                'sku'         => esc_html($item->sku),
-                'name'        => esc_html($item->name),
+                'sku'         => $item->sku,
                 'denom_value' => intval($item->denom_value),
                 'base_price'  => floatval($item->base_price)
             ];
         }, $items)); ?>;
         
-        const banks = <?php echo wp_json_encode(array_map(function($bank) {
+        var banks = <?php echo wp_json_encode(array_map(function($bank) {
             return [
-                'code' => esc_html($bank->code),
-                'name' => esc_html($bank->name)
+                'code' => $bank->code,
+                'name' => $bank->name
             ];
         }, $banks)); ?>;
-        
-        // DOM Elements
-        const rowsContainer     = document.getElementById('proc_rows');
-        const paymentsContainer = document.getElementById('payment_sources');
-        const modeInput         = document.getElementById('proc_mode');
-        const vendorListbox     = document.getElementById('vendor_listbox');
-        const vendorHidden      = document.getElementById('vendor_id_hidden');
-        const totalPembelianEl  = document.getElementById('total_pembelian');
-        const totalBayarEl      = document.getElementById('total_bayar');
-        const selisihEl         = document.getElementById('selisih_amount');
-        const selisihRow        = document.getElementById('selisih_row');
-        const submitBtn         = document.getElementById('btn_submit');
-        const confirmChk        = document.getElementById('confirm_data');
-        const procForm          = document.getElementById('proc_form');
-        
-        let mode = 'nominal';
-        let rowCounter = 0;
-        let paymentCounter = 0;
-        let isSubmitting = false;
 
         // ═══════════════════════════════════════════════════════════════
-        // UTILITY FUNCTIONS - FIXED
+        // DOM ELEMENTS
+        // ═══════════════════════════════════════════════════════════════
+        
+        var rowsContainer    = document.getElementById('proc_rows');
+        var paymentsContainer = document.getElementById('payment_sources');
+        var headerRow        = document.getElementById('header_row');
+        var modeInput        = document.getElementById('proc_mode');
+        var vendorListbox    = document.getElementById('vendor_listbox');
+        var vendorHidden     = document.getElementById('vendor_id_hidden');
+        var totalPembelianEl = document.getElementById('total_pembelian');
+        var totalBayarEl     = document.getElementById('total_bayar');
+        var selisihEl        = document.getElementById('selisih_amount');
+        var selisihRow       = document.getElementById('selisih_row');
+        var submitBtn        = document.getElementById('btn_submit');
+        var confirmChk       = document.getElementById('confirm_data');
+        var procForm         = document.getElementById('proc_form');
+
+        var mode = 'nominal';
+        var rowCounter = 0;
+        var paymentCounter = 0;
+
+        // ═══════════════════════════════════════════════════════════════
+        // UTILITY FUNCTIONS
         // ═══════════════════════════════════════════════════════════════
         
         function formatNumber(n) {
             return new Intl.NumberFormat('id-ID').format(Math.round(parseFloat(n || 0)));
         }
         
-        /**
-         * Parse angka format Indonesia
-         * "60.000.000" → 60000000
-         * "1.500,50" → 1500.5
-         */
         function parseNumber(v) {
-            v = String(v || '');
-            
-            // Jika ada koma (decimal Indonesia)
+            v = String(v || '').replace(/[^\d,.\-]/g, '');
+            // Handle format Indonesia:  1.000.000 atau 1.000,50
             if (v.indexOf(',') !== -1) {
+                // Ada koma = decimal separator Indonesia
                 v = v.replace(/\./g, '').replace(',', '.');
             } else {
-                // Hapus semua titik (separator ribuan)
+                // Hanya titik = thousand separator
                 v = v.replace(/\./g, '');
             }
-            
-            // Hapus karakter non-numerik
-            v = v.replace(/[^\d.\-]/g, '');
-            
             return v === '' ? 0 : parseFloat(v);
-        }
-        
-        function isBalanced(a, b) {
-            return Math.abs(a - b) < 1; // Toleransi 1 rupiah
         }
 
         // ═══════════════════════════════════════════════════════════════
         // VENDOR SELECTION
         // ═══════════════════════════════════════════════════════════════
         
-        vendorListbox.addEventListener('change', function() {
+        vendorListbox.onchange = function() {
             vendorHidden.value = this.value;
             this.classList.remove('vendor-required');
-            validateForm();
-        });
+            updateTotals();
+        };
 
         // ═══════════════════════════════════════════════════════════════
-        // ITEM ROW BUILDER
+        // BUILD ITEM ROW
         // ═══════════════════════════════════════════════════════════════
         
-        function makeItemSelect(name, selectedId) {
-            const sel = document.createElement('select');
-            sel.name = name;
+        function buildRow() {
+            var idx = rowCounter++;
+            var row = document.createElement('div');
+            row.className = 'proc-row ' + mode;
+
+            // === COL SKU ===
+            var colSku = document.createElement('div');
+            colSku.className = 'col-sku';
+            var sel = document.createElement('select');
+            sel.name = 'items[' + idx + '][id]';
             sel.required = true;
             sel.innerHTML = '<option value="">-- Pilih --</option>';
-            
-            items.forEach(it => {
-                const o = document.createElement('option');
+            items.forEach(function(it) {
+                var o = document.createElement('option');
                 o.value = it.id;
                 o.text = it.sku + ' (SAR ' + it.denom_value + ')';
                 o.dataset.denom = it.denom_value || 1;
-                o.dataset.basePrice = it.base_price || 0;
-                if (selectedId && selectedId == it.id) o.selected = true;
                 sel.appendChild(o);
             });
-            
-            return sel;
-        }
+            colSku.appendChild(sel);
 
-        function buildRow(data) {
-            data = data || {};
-            const idx = rowCounter++;
-            const row = document.createElement('div');
-            row.className = 'proc-row';
-            row.dataset.rowIndex = idx;
-
-            const sel = makeItemSelect('items[' + idx + '][id]', data.item_id || '');
-            
-            const qty = document.createElement('input');
+            // === COL QTY ===
+            var colQty = document.createElement('div');
+            colQty.className = 'col-qty';
+            var qty = document.createElement('input');
             qty.type = 'text';
             qty.name = 'items[' + idx + '][qty]';
             qty.placeholder = '0';
-            qty.value = data.qty ?  formatNumber(data.qty) : '';
-            qty.className = mode === 'nominal' ? 'readonly' : '';
-            qty.readOnly = mode === 'nominal';
+            colQty.appendChild(qty);
 
-            const kurs = document.createElement('input');
+            // === COL KURS ===
+            var colKurs = document.createElement('div');
+            colKurs.className = 'col-kurs';
+            var kurs = document.createElement('input');
             kurs.type = 'text';
             kurs.name = 'items[' + idx + '][kurs]';
             kurs.placeholder = 'Rp';
-            kurs.value = data.kurs ? formatNumber(data.kurs) : '';
+            colKurs.appendChild(kurs);
 
-            const totalRiyal = document.createElement('input');
-            totalRiyal.type = 'text';
-            totalRiyal.name = 'items[' + idx + '][total_riyal]';
-            totalRiyal.placeholder = '0';
-            totalRiyal.value = data.total_riyal ? formatNumber(data.total_riyal) : '';
-            totalRiyal.className = mode === 'qty' ? 'readonly' : '';
-            totalRiyal.readOnly = mode === 'qty';
+            // === COL RIYAL (Total SAR) ===
+            var colRiyal = document.createElement('div');
+            colRiyal.className = 'col-riyal';
+            var riyal = document.createElement('input');
+            riyal.type = 'text';
+            riyal.name = 'items[' + idx + '][total_riyal]';
+            riyal.placeholder = '0';
+            colRiyal.appendChild(riyal);
 
-            const totalRupiah = document.createElement('input');
-            totalRupiah.type = 'text';
-            totalRupiah.name = 'items[' + idx + '][total_rupiah]';
-            totalRupiah.className = 'readonly';
-            totalRupiah.readOnly = true;
-            totalRupiah.value = '0';
+            // === COL IDR (Total Rupiah) - Always readonly ===
+            var colIdr = document.createElement('div');
+            colIdr.className = 'col-idr';
+            var idr = document.createElement('input');
+            idr.type = 'text';
+            idr.name = 'items[' + idx + '][total_rupiah]';
+            idr.className = 'readonly';
+            idr.readOnly = true;
+            idr.value = '0';
+            colIdr.appendChild(idr);
 
-            const actions = document.createElement('div');
-            const btnRemove = document.createElement('button');
+            // === COL ACTION ===
+            var colAction = document.createElement('div');
+            colAction.className = 'col-action';
+            var btnRemove = document.createElement('button');
             btnRemove.type = 'button';
-            btnRemove.className = 'btn-sm btn-remove';
+            btnRemove.className = 'btn-remove';
             btnRemove.textContent = '×';
             btnRemove.title = 'Hapus baris';
-            actions.appendChild(btnRemove);
+            btnRemove.onclick = function() {
+                row.remove();
+                updateTotals();
+            };
+            colAction.appendChild(btnRemove);
 
-            row.appendChild(sel);
-            row.appendChild(qty);
-            row.appendChild(kurs);
-            row.appendChild(totalRiyal);
-            row.appendChild(totalRupiah);
-            row.appendChild(actions);
+            // === APPEND COLUMNS ===
+            row.appendChild(colSku);
+            row.appendChild(colRiyal);
+            row.appendChild(colKurs);
+            row.appendChild(colQty);
+            row.appendChild(colIdr);
+            row.appendChild(colAction);
 
+            // === RECALC FUNCTION ===
+            // FORMULA: [Total IDR] = [Total SAR] × [Kurs Beli]
             function recalc() {
-                const selected = sel.selectedOptions[0];
-                const denom = selected && selected.dataset.denom ?  parseNumber(selected.dataset.denom) : 1;
-                const kursVal = parseNumber(kurs.value);
+                var selected = sel.selectedOptions[0];
+                var denom = (selected && selected.value) ? parseNumber(selected.dataset.denom) : 0;
+                var kursVal = parseNumber(kurs.value);
 
                 if (mode === 'nominal') {
-                    const trVal = parseNumber(totalRiyal.value);
-                    const qtyVal = denom > 0 ? (trVal / denom) :  0;
-                    qty.value = formatNumber(qtyVal);
-                    totalRupiah.value = formatNumber(trVal * kursVal);
+                    // By Nominal:  User input Total SAR → Calculate Qty
+                    var trVal = parseNumber(riyal.value);
+                    var qtyVal = denom > 0 ? (trVal / denom) : 0;
+                    qty.value = denom > 0 ? formatNumber(qtyVal) : '0';
+                    idr.value = formatNumber(trVal * kursVal);
                 } else {
-                    const qtyVal = parseNumber(qty.value);
-                    const trVal = qtyVal * denom;
-                    totalRiyal.value = formatNumber(trVal);
-                    totalRupiah.value = formatNumber(trVal * kursVal);
+                    // By Quantity:  User input Qty → Calculate Total SAR
+                    var qtyVal = parseNumber(qty.value);
+                    var trVal = qtyVal * denom;
+                    riyal.value = formatNumber(trVal);
+                    idr.value = formatNumber(trVal * kursVal);
                 }
-                
                 updateTotals();
             }
 
-            sel.addEventListener('change', recalc);
-            qty.addEventListener('input', recalc);
-            kurs.addEventListener('input', recalc);
-            totalRiyal.addEventListener('input', recalc);
+            // === EVENT BINDINGS ===
+            sel.onchange = recalc;
+            kurs.oninput = recalc;
+            qty.oninput = function() { if (mode === 'quantity') recalc(); };
+            riyal.oninput = function() { if (mode === 'nominal') recalc(); };
 
-            btnRemove.addEventListener('click', function() {
-                row.remove();
-                updateTotals();
-            });
+            // === APPLY INITIAL MODE ===
+            applyRowMode(row);
 
+            rowsContainer.appendChild(row);
             return row;
         }
 
         // ═══════════════════════════════════════════════════════════════
-        // PAYMENT ROW BUILDER
+        // BUILD PAYMENT ROW
         // ═══════════════════════════════════════════════════════════════
         
-        function buildPaymentRow(data) {
-            data = data || {};
-            const idx = paymentCounter++;
-            const row = document.createElement('div');
+        function buildPaymentRow() {
+            var idx = paymentCounter++;
+            var row = document.createElement('div');
             row.className = 'proc-payment-row';
-            row.dataset.paymentIndex = idx;
 
-            const sel = document.createElement('select');
+            var sel = document.createElement('select');
             sel.name = 'payments[' + idx + '][account]';
             sel.required = true;
             sel.innerHTML = '<option value="">-- Pilih Sumber --</option>';
-            
             banks.forEach(function(b) {
-                const o = document.createElement('option');
+                var o = document.createElement('option');
                 o.value = b.code;
                 o.text = b.code + ' - ' + b.name;
-                if (data.account && data.account == b.code) o.selected = true;
                 sel.appendChild(o);
             });
 
-            const amount = document.createElement('input');
+            var amount = document.createElement('input');
             amount.type = 'text';
             amount.name = 'payments[' + idx + '][amount]';
             amount.placeholder = 'Rp 0';
-            amount.value = data.amount ? formatNumber(data.amount) : '';
+            amount.oninput = updateTotals;
 
-            const btnRemove = document.createElement('button');
+            var btnRemove = document.createElement('button');
             btnRemove.type = 'button';
-            btnRemove.className = 'btn-sm btn-remove';
+            btnRemove.className = 'btn-remove';
             btnRemove.textContent = '×';
             btnRemove.title = 'Hapus sumber';
-
-            amount.addEventListener('input', updateTotals);
-            btnRemove.addEventListener('click', function() {
+            btnRemove.onclick = function() {
                 row.remove();
                 updateTotals();
-            });
+            };
 
             row.appendChild(sel);
             row.appendChild(amount);
             row.appendChild(btnRemove);
 
+            paymentsContainer.appendChild(row);
             return row;
         }
 
         // ═══════════════════════════════════════════════════════════════
-        // TOTALS & VALIDATION
+        // APPLY MODE TO SINGLE ROW (Enable/Disable Logic)
+        // ═══════════════════════════════════════════════════════════════
+        
+        function applyRowMode(row) {
+            var qtyInput = row.querySelector('.col-qty input');
+            var riyalInput = row.querySelector('.col-riyal input');
+
+            if (mode === 'nominal') {
+                // By Nominal:  Riyal editable, Qty readonly
+                qtyInput.readOnly = true;
+                qtyInput.classList.add('readonly');
+                riyalInput.readOnly = false;
+                riyalInput.classList.remove('readonly');
+            } else {
+                // By Quantity: Qty editable, Riyal readonly
+                qtyInput.readOnly = false;
+                qtyInput.classList.remove('readonly');
+                riyalInput.readOnly = true;
+                riyalInput.classList.add('readonly');
+            }
+        }
+
+        // ═══════════════════════════════════════════════════════════════
+        // SET MODE - Switch Column Order via CSS Class
+        // ═══════════════════════════════════════════════════════════════
+        
+        function setMode(newMode) {
+            mode = newMode;
+            modeInput.value = newMode;
+
+            // Update header row class
+            headerRow.classList.remove('nominal', 'quantity');
+            headerRow.classList.add(newMode);
+
+            // Update all data rows
+            rowsContainer.querySelectorAll('.proc-row').forEach(function(row) {
+                row.classList.remove('nominal', 'quantity');
+                row.classList.add(newMode);
+                applyRowMode(row);
+            });
+
+            // Update tab appearance
+            if (newMode === 'nominal') {
+                document.getElementById('tab_nominal').classList.add('active');
+                document.getElementById('tab_qty').classList.remove('active');
+            } else {
+                document.getElementById('tab_qty').classList.add('active');
+                document.getElementById('tab_nominal').classList.remove('active');
+            }
+
+            updateTotals();
+        }
+
+        // ═══════════════════════════════════════════════════════════════
+        // UPDATE TOTALS & VALIDATE
+        // Formula: Total Pembelian = SUM(Total IDR)
         // ═══════════════════════════════════════════════════════════════
         
         function updateTotals() {
+            // Calculate Total Pembelian
             var totalBelanja = 0;
-            document.querySelectorAll('.proc-row').forEach(function(r) {
-                var rupiah = r.querySelector('input[name*="total_rupiah"]');
-                if (rupiah) totalBelanja += parseNumber(rupiah.value);
+            rowsContainer.querySelectorAll('.proc-row').forEach(function(r) {
+                var idrInput = r.querySelector('.col-idr input');
+                if (idrInput) totalBelanja += parseNumber(idrInput.value);
             });
             totalPembelianEl.textContent = formatNumber(totalBelanja);
 
+            // Calculate Total Bayar
             var totalBayar = 0;
-            document.querySelectorAll('.proc-payment-row').forEach(function(r) {
-                var amount = r.querySelector('input[name*="amount"]');
-                if (amount) totalBayar += parseNumber(amount.value);
+            paymentsContainer.querySelectorAll('.proc-payment-row').forEach(function(r) {
+                var amountInput = r.querySelector('input[name*="amount"]');
+                if (amountInput) totalBayar += parseNumber(amountInput.value);
             });
             totalBayarEl.textContent = formatNumber(totalBayar);
 
-            var selisih = totalBayar - totalBelanja;
-            selisihEl.textContent = 'Rp ' + formatNumber(Math.abs(selisih));
-            
-            if (isBalanced(totalBayar, totalBelanja) && totalBelanja > 0) {
+            // Calculate Selisih
+            var diff = totalBayar - totalBelanja;
+            selisihEl.textContent = 'Rp ' + formatNumber(Math.abs(diff));
+
+            // Update selisih display
+            if (Math.abs(diff) < 1 && totalBelanja > 0) {
                 selisihRow.classList.add('zero');
                 selisihRow.classList.remove('selisih');
                 selisihEl.textContent = 'Rp 0 ✓';
             } else {
                 selisihRow.classList.remove('zero');
                 selisihRow.classList.add('selisih');
-                
-                if (selisih > 0) {
-                    selisihEl.textContent = '(lebih) ' + 'Rp ' + formatNumber(selisih) ;
-                } else if (selisih < 0) {
-                    selisihEl.textContent = '(kurang) ' + 'Rp ' + formatNumber(Math.abs(selisih)) ;
+                if (diff > 0) {
+                    selisihEl.textContent = '(lebih) Rp ' + formatNumber(diff);
+                } else if (diff < 0) {
+                    selisihEl.textContent = '(kurang) Rp ' + formatNumber(Math.abs(diff));
                 }
             }
 
+            // Validate form
             validateForm();
         }
-        
+
         function validateForm() {
             var totalBelanja = 0;
-            document.querySelectorAll('.proc-row').forEach(function(r) {
-                var rupiah = r.querySelector('input[name*="total_rupiah"]');
-                if (rupiah) totalBelanja += parseNumber(rupiah.value);
+            rowsContainer.querySelectorAll('.proc-row').forEach(function(r) {
+                var idrInput = r.querySelector('.col-idr input');
+                if (idrInput) totalBelanja += parseNumber(idrInput.value);
             });
 
             var totalBayar = 0;
-            document.querySelectorAll('.proc-payment-row').forEach(function(r) {
-                var amount = r.querySelector('input[name*="amount"]');
-                if (amount) totalBayar += parseNumber(amount.value);
+            paymentsContainer.querySelectorAll('.proc-payment-row').forEach(function(r) {
+                var amountInput = r.querySelector('input[name*="amount"]');
+                if (amountInput) totalBayar += parseNumber(amountInput.value);
             });
-            
+
             var vendorSelected = vendorListbox.value !== '';
             var hasItems = totalBelanja > 0;
-            var balanced = isBalanced(totalBayar, totalBelanja);
+            var balanced = Math.abs(totalBayar - totalBelanja) < 1;
             var confirmed = confirmChk.checked;
-            
-            var canSubmit = vendorSelected && hasItems && balanced && confirmed && ! isSubmitting;
-            
-            submitBtn.disabled = !canSubmit;
+
+            submitBtn.disabled = !(vendorSelected && hasItems && balanced && confirmed);
         }
 
         // ═══════════════════════════════════════════════════════════════
-        // MODE SWITCHING
+        // EVENT BINDINGS
         // ═══════════════════════════════════════════════════════════════
         
-        function applyMode(newMode) {
-            mode = newMode;
-            modeInput.value = newMode;
-            
-            document.querySelectorAll('.proc-row').forEach(function(r) {
-                var qty = r.querySelector('input[name*="[qty]"]');
-                var totalRiyal = r.querySelector('input[name*="total_riyal"]');
-                
-                if (newMode === 'nominal') {
-                    qty.readOnly = true;
-                    qty.classList.add('readonly');
-                    totalRiyal.readOnly = false;
-                    totalRiyal.classList.remove('readonly');
-                } else {
-                    qty.readOnly = false;
-                    qty.classList.remove('readonly');
-                    totalRiyal.readOnly = true;
-                    totalRiyal.classList.add('readonly');
-                }
-            });
-        }
+        document.getElementById('tab_nominal').onclick = function() { setMode('nominal'); };
+        document.getElementById('tab_qty').onclick = function() { setMode('quantity'); };
+        document.getElementById('btn_add_row').onclick = function() { buildRow(); };
+        document.getElementById('btn_add_payment').onclick = function() { buildPaymentRow(); };
+        confirmChk.onchange = updateTotals;
 
-        document.getElementById('tab_nominal').addEventListener('click', function() {
-            this.classList.add('active');
-            document.getElementById('tab_qty').classList.remove('active');
-            applyMode('nominal');
-        });
-
-        document.getElementById('tab_qty').addEventListener('click', function() {
-            this.classList.add('active');
-            document.getElementById('tab_nominal').classList.remove('active');
-            applyMode('qty');
-        });
-
-        // ═══════════════════════════════════════════════════════════════
-        // FORM SUBMISSION
-        // ═══════════════════════════════════════════════════════════════
-        
-        procForm.addEventListener('submit', function(e) {
+        // Form submit handler
+        procForm.onsubmit = function(e) {
             if (! vendorListbox.value) {
                 e.preventDefault();
                 vendorListbox.classList.add('vendor-required');
                 vendorListbox.focus();
-                alert('Silakan pilih vendor terlebih dahulu! ');
+                alert('Silakan pilih vendor terlebih dahulu!');
                 return false;
             }
-            
-            if (isSubmitting) {
-                e.preventDefault();
-                return false;
-            }
-            
-            isSubmitting = true;
             submitBtn.disabled = true;
             submitBtn.classList.add('processing');
             submitBtn.textContent = '⏳ MEMPROSES...';
-            
-            setTimeout(function() {
-                isSubmitting = false;
-                submitBtn.disabled = false;
-                submitBtn.classList.remove('processing');
-                submitBtn.textContent = 'SUBMIT PEMBELIAN';
-            }, 15000);
-        });
-
-        // ═══════════════════════════════════════════════════════════════
-        // EVENT LISTENERS
-        // ═══════════════════════════════════════════════════════════════
-        
-        document.getElementById('btn_add_row').addEventListener('click', function() {
-            rowsContainer.appendChild(buildRow());
-        });
-        
-        document.getElementById('btn_add_payment').addEventListener('click', function() {
-            paymentsContainer.appendChild(buildPaymentRow());
-        });
-
-        confirmChk.addEventListener('change', validateForm);
+        };
 
         // ═══════════════════════════════════════════════════════════════
         // INITIALIZATION
         // ═══════════════════════════════════════════════════════════════
         
-        rowsContainer.appendChild(buildRow());
-        paymentsContainer.appendChild(buildPaymentRow());
-        paymentsContainer.appendChild(buildPaymentRow());
-        
-        updateTotals();
-        
+        buildRow();
+        buildPaymentRow();
+        buildPaymentRow();
+        setMode('nominal');
+
     })();
     </script>
     <?php
@@ -717,55 +873,32 @@ function puri_handle_procurement_submit() {
     $engine = puri_engine();
     
     $vendor_id = intval($_POST['vendor_id'] ?? 0);
-	// Ambil nama vendor dari judul post
-	$vendor_name = get_the_title($vendor_id) ?: 'Vendor #' . $vendor_id;
-
-	// ✅ Ambil KODE VENDOR dari ACF field 'vendor_code'
-	$vendor_code = get_field('vendor_code', $vendor_id);
-	if (empty($vendor_code)) {
-		// Fallback jika field belum diisi
-		$vendor_code = 'VND-' . str_pad($vendor_id, 2, '0', STR_PAD_LEFT);
-	}
-
-    $items     = $_POST['items'] ?? [];
-    $payments  = $_POST['payments'] ?? [];
-    
-    // Debug:  Log received data
-    if (defined('WP_DEBUG') && WP_DEBUG) {
-        error_log('[PURI Procurement] vendor_id: ' . $vendor_id);
-        error_log('[PURI Procurement] items: ' .  print_r($items, true));
-        error_log('[PURI Procurement] payments: ' . print_r($payments, true));
+    $vendor_name = get_the_title($vendor_id) ?: 'Vendor #' . $vendor_id;
+    $vendor_code = get_field('vendor_code', $vendor_id);
+    if (empty($vendor_code)) {
+        $vendor_code = 'VND-' . str_pad($vendor_id, 2, '0', STR_PAD_LEFT);
     }
+
+    $items    = $_POST['items'] ?? [];
+    $payments = $_POST['payments'] ?? [];
     
+    // Validasi
     if (empty($vendor_id)) {
-        wp_redirect(add_query_arg(
-            'puri_procure_err',
-            urlencode('Vendor harus dipilih! '),
-            admin_url('admin.php?page=puri-procurement')
-        ));
+        wp_redirect(add_query_arg('puri_procure_err', urlencode('Vendor harus dipilih! '), admin_url('admin.php?page=puri-procurement')));
         exit;
     }
     
     if (empty($items)) {
-        wp_redirect(add_query_arg(
-            'puri_procure_err',
-            urlencode('Minimal 1 item harus diisi!'),
-            admin_url('admin.php?page=puri-procurement')
-        ));
+        wp_redirect(add_query_arg('puri_procure_err', urlencode('Minimal 1 item harus diisi!'), admin_url('admin.php?page=puri-procurement')));
         exit;
     }
     
     if (empty($payments)) {
-        wp_redirect(add_query_arg(
-            'puri_procure_err',
-            urlencode('Sumber pembayaran harus diisi!'),
-            admin_url('admin.php?page=puri-procurement')
-        ));
+        wp_redirect(add_query_arg('puri_procure_err', urlencode('Sumber pembayaran harus diisi!'), admin_url('admin.php? page=puri-procurement')));
         exit;
     }
     
     $ref_id = 'PRO-' . date('ymdHi') . wp_rand(100, 999);
-    $vendor_name = get_the_title($vendor_id) ?: 'Vendor #' . $vendor_id;
     
     $wpdb->query('START TRANSACTION');
     
@@ -776,16 +909,11 @@ function puri_handle_procurement_submit() {
         foreach ($items as $it) {
             $item_id = intval($it['id'] ?? 0);
             
-            // Parse qty - handle format Indonesia
-            $qty_raw = $it['qty'] ?? '0';
-            $qty_raw = str_replace('.', '', $qty_raw); // Hapus titik ribuan
-            $qty_raw = str_replace(',', '.', $qty_raw); // Ganti koma decimal
+            // Parse format Indonesia
+            $qty_raw = str_replace(['. ', ','], ['', '.'], $it['qty'] ?? '0');
             $qty = floatval($qty_raw);
             
-            // Parse kurs - handle format Indonesia
-            $kurs_raw = $it['kurs'] ?? '0';
-            $kurs_raw = str_replace('.', '', $kurs_raw);
-            $kurs_raw = str_replace(',', '.', $kurs_raw);
+            $kurs_raw = str_replace(['.', ','], ['', '.'], $it['kurs'] ?? '0');
             $kurs = floatval($kurs_raw);
             
             if ($item_id <= 0 || $qty <= 0 || $kurs <= 0) {
@@ -797,52 +925,49 @@ function puri_handle_procurement_submit() {
                 throw new Exception("Item ID {$item_id} tidak ditemukan");
             }
             
+            // Update stok
             $res = $engine->update_stock_atomic('gudang_utama', $item_id, $qty);
             if (is_wp_error($res)) {
                 throw new Exception('Gagal update stok: ' . $res->get_error_message());
             }
             
+            // Calculate moving average HPP
             $new_avg = $engine->calculate_moving_avg($item_id, $qty, $kurs, true);
             if (is_wp_error($new_avg)) {
                 throw new Exception('Gagal hitung HPP: ' . $new_avg->get_error_message());
             }
             
-            $ledger_result = $wpdb->insert(
+            // Insert ledger
+            $wpdb->insert(
                 puri_table_name('T_LEDGER'),
                 [
                     'location_id' => 'gudang_utama',
                     'item_id'     => $item_id,
                     'qty_change'  => $qty,
                     'ref_id'      => $ref_id,
-                    'description' => sprintf(
-                        'Kulakan dari %s | Kurs:  Rp %s | HPP baru: Rp %s',
+                    'description' => sprintf('Kulakan dari %s | Kurs:  Rp %s | HPP baru: Rp %s',
                         $vendor_name,
                         number_format($kurs, 0, ',', '.'),
                         number_format($new_avg, 2, ',', '.')
                     ),
-                    'trx_date'    => current_time('mysql')
+                    'trx_date' => current_time('mysql')
                 ],
                 ['%s', '%d', '%f', '%s', '%s', '%s']
             );
             
-            if ($ledger_result === false) {
-                throw new Exception('Gagal insert ledger: ' . $wpdb->last_error);
-            }
-            
-			
             $denom = intval($item->denom_value) ?: 1;
             $total_riyal = $qty * $denom;
             $subtotal = $total_riyal * $kurs;
             $total_belanja += $subtotal;
             
             $items_processed[] = [
-                'sku'      => $item->sku,
-                'qty'      => $qty,
-                'denom'    => $denom,
-				'total_riyal' => $total_riyal, 
-                'kurs'     => $kurs,
-                'subtotal' => $subtotal,
-                'new_hpp'  => $new_avg
+                'sku'         => $item->sku,
+                'qty'         => $qty,
+                'denom'       => $denom,
+                'total_riyal' => $total_riyal,
+                'kurs'        => $kurs,
+                'subtotal'    => $subtotal,
+                'new_hpp'     => $new_avg
             ];
         }
         
@@ -850,76 +975,45 @@ function puri_handle_procurement_submit() {
             throw new Exception('Tidak ada item valid yang diproses');
         }
         
-		$desc_items = array_map(function($it) {
-			// Format:  SAR 5 (1.500 riyal @4.210)
-			return sprintf(
-				'SAR %s (%s riyal @%s)',
-				number_format($it['denom']),                      // Denom:  5, 10, 20, dll
-				number_format($it['total_riyal']),                // Total riyal:  1.500
-				number_format($it['kurs'], 0, ',', '.')           // Kurs: 4.210
-			);
-		}, $items_processed);
-
-		// Format:  Kulakan [TR-01] - Bank of Dubai : SAR 5 (1.500 riyal @4.210) ; SAR 20 (2.300 riyal @4.210)
-		$journal_desc = sprintf(
-			'Kulakan %s [%s] : %s',
-			$vendor_code,                        // Kode vendor:  TR-01
-			$vendor_name,                        // Nama vendor: Bank of Dubai
-			implode(' ; ', $desc_items)          // Items dipisah dengan " ; "
-		);
-
+        // Build description
+        $desc_items = array_map(function($it) {
+            return sprintf('SAR %s (%s riyal @%s)',
+                number_format($it['denom']),
+                number_format($it['total_riyal']),
+                number_format($it['kurs'], 0, ',', '.')
+            );
+        }, $items_processed);
         
-        $journal_result = $engine->post_journal(
-            $ref_id,
-            '1401',
-            $total_belanja,
-            0,
-            $journal_desc,
-            [
-                'vendor_id'   => $vendor_id,
-                'vendor_name' => $vendor_name,
-                'items'       => $items_processed,
-                'total_idr'   => $total_belanja
-            ]
+        $journal_desc = sprintf('Kulakan %s [%s] :  %s',
+            $vendor_code,
+            $vendor_name,
+            implode(' ; ', $desc_items)
         );
         
-        if (is_wp_error($journal_result)) {
-            throw new Exception('Gagal post journal debit: ' . $journal_result->get_error_message());
-        }
+        // Post journal debit persediaan
+        $engine->post_journal($ref_id, '1401', $total_belanja, 0, $journal_desc, [
+            'vendor_id'   => $vendor_id,
+            'vendor_name' => $vendor_name,
+            'items'       => $items_processed,
+            'total_idr'   => $total_belanja
+        ]);
         
+        // Post journal credit per payment
         $total_bayar = 0;
-        
         foreach ($payments as $pmt) {
             $acc_code = sanitize_text_field($pmt['account'] ?? '');
-            
-            // Parse amount - handle format Indonesia
-            $amount_raw = $pmt['amount'] ?? '0';
-            $amount_raw = str_replace('.', '', $amount_raw);
-            $amount_raw = str_replace(',', '.', $amount_raw);
+            $amount_raw = str_replace(['.', ','], ['', '.'], $pmt['amount'] ?? '0');
             $amount = floatval($amount_raw);
             
-            if (empty($acc_code) || $amount <= 0) {
-                continue;
-            }
+            if (empty($acc_code) || $amount <= 0) continue;
             
-            $credit_result = $engine->post_journal(
-                $ref_id,
-                $acc_code,
-                0,
-                $amount,
-                "Pembayaran kulakan {$ref_id} via {$acc_code}"
-            );
-            
-            if (is_wp_error($credit_result)) {
-                throw new Exception('Gagal post journal credit: ' . $credit_result->get_error_message());
-            }
-            
+            $engine->post_journal($ref_id, $acc_code, 0, $amount, "Pembayaran kulakan {$ref_id} via {$acc_code}");
             $total_bayar += $amount;
         }
         
+        // Validate balance
         if (abs($total_bayar - $total_belanja) > 1) {
-            throw new Exception(sprintf(
-                'Total pembayaran (Rp %s) tidak sama dengan total belanja (Rp %s)',
+            throw new Exception(sprintf('Total pembayaran (Rp %s) tidak sama dengan total belanja (Rp %s)',
                 number_format($total_bayar),
                 number_format($total_belanja)
             ));
@@ -930,7 +1024,7 @@ function puri_handle_procurement_submit() {
         wp_redirect(add_query_arg(
             'puri_procure_ok',
             urlencode("Berhasil!  Ref:  {$ref_id} | Total:  Rp " . number_format($total_belanja)),
-            admin_url('admin.php?page=puri-procurement')
+            admin_url('admin. php?page=puri-procurement')
         ));
         exit;
         
