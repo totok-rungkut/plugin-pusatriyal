@@ -86,6 +86,13 @@
  * CHANGELOG
  * =============================================================================
  *
+ * [6.0.3] 2026-01-05
+ * - Fixed: JavaScript string concatenation (bundle_parts, eceran_parts)
+ * - Fixed: Missing ajaxurl definition
+ * - Fixed: Capability check fallback when PURI_CAP_POS undefined
+ * - Fixed: Safe SFX calls with existence checks
+ * - Improved: Error handling in AJAX responses
+ *
  * [6.0.2] 2026-01-05
  *   - Added: Role gating to allow only 'kasir' and 'finance' (plus admins) to operate POS.
  *   - Added: UI behaviour aligned with MC-08 stock cards and shared SFX integration.
@@ -108,32 +115,33 @@
  * =============================================================================
  */
  
- 
+
+
 defined('ABSPATH') || exit;
 
-add_action('admin_menu', function() {
-    // The menu registration already exists in mc-00 -> add_submenu_page('puri-transaksi','Kasir POS', ...).
-    // This file only provides the renderer and AJAX handlers.
-});
+// ✅ Ensure PURI_CAP_POS is defined (fallback if MC-24 not loaded yet)
+if (!defined('PURI_CAP_POS')) {
+    define('PURI_CAP_POS', 'puri_can_pos');
+}
 
 /**
  * Render POS admin page.
  * Accessible only to users who can perform POS (PURI_CAP_POS).
  */
 function puri_render_pos_page() {
-    // Capability gate: kasir & finance (they have PURI_CAP_POS)
-    if (!defined('PURI_CAP_POS') || !( current_user_can(PURI_CAP_POS) || current_user_can('manage_options') ) ) {
-        wp_die(__('Unauthorized', 'puri'), 403);
+    // ✅ Capability gate with fallback
+    if (!(current_user_can(PURI_CAP_POS) || current_user_can('manage_options'))) {
+        wp_die(__('Anda tidak memiliki akses ke halaman ini. Hubungi administrator.', 'puri'), 403);
     }
 
-    global $wpdb, $puri_engine;
+    global $wpdb;
 
     // Ensure engine instance exists
-    if (!isset($puri_engine) && function_exists('puri_engine')) {
-        $puri_engine = puri_engine();
+    if (!function_exists('puri_engine')) {
+        wp_die(__('Engine tidak tersedia. Hubungi developer.', 'puri'), 500);
     }
 
-    // Prepare items with laci stock & locks similar to previous implementation
+    // Prepare items with laci stock & locks
     $items = $wpdb->get_results("
         SELECT i.id, i.sku, i.name, i.type, i.denom_value, i.sell_rate,
                COALESCE(s.qty,0) AS stock_laci,
@@ -146,9 +154,14 @@ function puri_render_pos_page() {
 
     // Customers for registered mode
     $customers = get_posts(['post_type'=>'pr_customer','posts_per_page'=>-1,'orderby'=>'title','order'=>'ASC']);
-    $customer_list = array_map(function($c){ return ['id'=>$c->ID,'name'=>$c->post_title,'nik'=>get_field('cust_nik',$c->ID)]; }, $customers);
+    $customer_list = array_map(function($c){ 
+        return [
+            'id'=>$c->ID,
+            'name'=>$c->post_title,
+            'nik'=>get_field('cust_nik',$c->ID)
+        ]; 
+    }, $customers);
 
-    // Provide page
     ?>
     <div class="wrap">
       <h1>💰 Kasir POS — Pusat Riyal</h1>
@@ -182,7 +195,14 @@ function puri_render_pos_page() {
                     $available = max(0, floatval($it->stock_laci) - floatval($it->qty_lock));
                     $badge_class = $available >= 100 ? 'puri-badge-blue' : ($available > 0 ? 'puri-badge-red' : 'puri-badge-grey');
                 ?>
-                <div class="puri-stock-card" tabindex="0" data-id="<?php echo intval($it->id); ?>" data-sku="<?php echo esc_attr($it->sku); ?>" data-type="<?php echo esc_attr($it->type); ?>" data-name="<?php echo esc_attr($it->name); ?>" data-denom="<?php echo intval($it->denom_value); ?>" data-rate="<?php echo esc_attr($it->sell_rate); ?>" data-stock="<?php echo esc_attr($available); ?>">
+                <div class="puri-stock-card" tabindex="0" 
+                     data-id="<?php echo intval($it->id); ?>" 
+                     data-sku="<?php echo esc_attr($it->sku); ?>" 
+                     data-type="<?php echo esc_attr($it->type); ?>" 
+                     data-name="<?php echo esc_attr($it->name); ?>" 
+                     data-denom="<?php echo intval($it->denom_value); ?>" 
+                     data-rate="<?php echo esc_attr($it->sell_rate); ?>" 
+                     data-stock="<?php echo esc_attr($available); ?>">
                     <div style="display:flex;justify-content:space-between;align-items:flex-start">
                         <h4><?php echo esc_html($it->sku); ?></h4>
                         <div style="font-size:12px;color:#94a3b8"><?php echo esc_html($it->type); ?></div>
@@ -243,6 +263,9 @@ function puri_render_pos_page() {
 
     <script>
     (function(){
+        // ✅ FIX: Define ajaxurl explicitly (WordPress standard)
+        const ajaxurl = '<?php echo esc_js(admin_url('admin-ajax.php')); ?>';
+        
         const grid = document.getElementById('puriPosStockGrid');
         const cartList = document.getElementById('puriCartList');
         const totalRiyalEl = document.getElementById('puriTotalRiyal');
@@ -252,19 +275,16 @@ function puri_render_pos_page() {
         const custSelect = document.getElementById('puriCustomerSelect');
         const sfxToggle = document.getElementById('puriSfxToggle');
 
-        // initialize sfx toggle from local state if PURI helper exists
-        if (window.PURI && typeof window.PURI.isSoundFxEnabled === 'function') {
+        // ✅ Safe SFX initialization
+        if (sfxToggle && window.PURI && typeof window.PURI.isSoundFxEnabled === 'function') {
             sfxToggle.checked = window.PURI.isSoundFxEnabled();
-        }
-
-        sfxToggle.addEventListener('change', function(){
-            if (window.PURI && typeof window.PURI.setSoundFxEnabled === 'function') {
+            sfxToggle.addEventListener('change', function(){
                 window.PURI.setSoundFxEnabled(!!sfxToggle.checked);
-                if (sfxToggle.checked && window.PURI && window.PURI.SFX && window.PURI.SFX.fx_notif_updates) {
+                if (sfxToggle.checked && window.PURI.SFX && window.PURI.SFX.fx_notif_updates) {
                     window.PURI.playSoundFx(window.PURI.SFX.fx_notif_updates, { allowOverlap: true });
                 }
-            }
-        });
+            });
+        }
 
         let cart = []; // {id, sku, name, denom, qty, rate, type}
 
@@ -287,16 +307,21 @@ function puri_render_pos_page() {
                 totalIdr += (row.qty * (row.denom||1) * (row.rate||0));
                 const div = document.createElement('div');
                 div.className = 'puri-cart-row';
-                div.innerHTML = `<div style="flex:1">
-                    <div style="font-weight:700">${row.sku} &times; ${row.qty}</div>
-                    <div style="font-size:12px;color:#475569">${row.name}</div>
-                </div>
-                <div style="text-align:right;min-width:120px">
-                    <div>Rp ${formatNumber(row.rate)}</div>
-                    <div style="font-weight:900">Rp ${formatNumber(row.qty * row.denom * row.rate)}</div>
-                </div>`;
-                // allow click to remove
-                div.addEventListener('click', function(){ if(confirm('Hapus item dari keranjang?')) { cart.splice(i,1); renderCart(); }});
+                div.innerHTML = '<div style="flex:1">' +
+                    '<div style="font-weight:700">' + row.sku + ' × ' + row.qty + '</div>' +
+                    '<div style="font-size:12px;color:#475569">' + row.name + '</div>' +
+                '</div>' +
+                '<div style="text-align:right;min-width:120px">' +
+                    '<div>Rp ' + formatNumber(row.rate) + '</div>' +
+                    '<div style="font-weight:900">Rp ' + formatNumber(row.qty * row.denom * row.rate) + '</div>' +
+                '</div>';
+                
+                div.addEventListener('click', function(){ 
+                    if(confirm('Hapus item dari keranjang?')) { 
+                        cart.splice(i,1); 
+                        renderCart(); 
+                    }
+                });
                 cartList.appendChild(div);
             });
             totalRiyalEl.textContent = formatNumber(totalRiyal);
@@ -304,54 +329,65 @@ function puri_render_pos_page() {
             checkoutBtn.disabled = !(cart.length > 0 && confirmChk.checked);
         }
 
-        // Attach handlers to card actions (delegation)
-        grid.querySelectorAll('.puri-stock-card').forEach(function(card){
-            const addBtn = card.querySelector('[data-action="add"]');
-            const bundleBtn = card.querySelector('[data-action="bundle"]');
-            const qtyInput = card.querySelector('.puri-qty-input');
+        // Attach handlers to card actions
+        if (grid) {
+            grid.querySelectorAll('.puri-stock-card').forEach(function(card){
+                const addBtn = card.querySelector('[data-action="add"]');
+                const bundleBtn = card.querySelector('[data-action="bundle"]');
+                const qtyInput = card.querySelector('.puri-qty-input');
 
-            const id = card.dataset.id;
-            const sku = card.dataset.sku;
-            const type = card.dataset.type;
-            const name = card.dataset.name;
-            const denom = parseInt(card.dataset.denom||'1',10);
-            const rate = parseFloat(card.dataset.rate||'0');
-            const stock = parseFloat(card.dataset.stock||'0');
+                const id = card.dataset.id;
+                const sku = card.dataset.sku;
+                const type = card.dataset.type;
+                const name = card.dataset.name;
+                const denom = parseInt(card.dataset.denom||'1',10);
+                const rate = parseFloat(card.dataset.rate||'0');
+                const stock = parseFloat(card.dataset.stock||'0');
 
-            // Clicking card itself adds 1 by default
-            card.addEventListener('click', function(ev){
-                // ignore clicks that come from inner controls
-                if (ev.target.closest('.puri-card-actions')) return;
-                addToCart(1);
-            });
+                // Card click adds 1
+                card.addEventListener('click', function(ev){
+                    if (ev.target.closest('.puri-card-actions')) return;
+                    addToCart(1);
+                });
 
-            if (addBtn) addBtn.addEventListener('click', function(ev){
-                ev.stopPropagation();
-                const qty = parseInt(qtyInput.value||'0',10) || 1;
-                addToCart(qty);
-            });
+                // Add button
+                if (addBtn) addBtn.addEventListener('click', function(ev){
+                    ev.stopPropagation();
+                    const qty = parseInt(qtyInput.value||'0',10) || 1;
+                    addToCart(qty);
+                });
 
-            if (bundleBtn) bundleBtn.addEventListener('click', function(ev){
-                ev.stopPropagation();
-                const qty = parseInt(qtyInput.value||'0',10) || 1;
-                buildBundle(id, qty);
-            });
+                // Bundle button
+                if (bundleBtn) bundleBtn.addEventListener('click', function(ev){
+                    ev.stopPropagation();
+                    const qty = parseInt(qtyInput.value||'0',10) || 1;
+                    buildBundle(id, qty);
+                });
 
-            function addToCart(qty){
-                if (qty < 1) return;
-                // For packages, qty refers to package count; for currency, qty is pieces
-                // Validate stock (stock is in pieces for currency; in grid we show available pieces)
-                if (type !== 'package' && qty > stock) { if (window.PURI) window.PURI.playSoundFx(window.PURI.SFX.fx_stock_empty); return alert('Stok tidak cukup di laci'); }
-                const idx = findCartIdx(id);
-                if (idx >= 0) {
-                    cart[idx].qty += qty;
-                } else {
-                    cart.push({ id:id, sku:sku, name:name, denom:denom, qty:qty, rate:rate, type:type });
+                function addToCart(qty){
+                    if (qty < 1) return;
+                    if (type !== 'package' && qty > stock) { 
+                        playSfx('fx_stock_empty');
+                        return alert('Stok tidak cukup di laci'); 
+                    }
+                    const idx = findCartIdx(id);
+                    if (idx >= 0) {
+                        cart[idx].qty += qty;
+                    } else {
+                        cart.push({ id:id, sku:sku, name:name, denom:denom, qty:qty, rate:rate, type:type });
+                    }
+                    playSfx('fx_card_clicked');
+                    renderCart();
                 }
-                if (window.PURI) window.PURI.playSoundFx(window.PURI.SFX.fx_card_clicked, { allowOverlap: true });
-                renderCart();
+            });
+        }
+
+        // ✅ Safe SFX helper
+        function playSfx(fxName) {
+            if (window.PURI && typeof window.PURI.playSoundFx === 'function' && window.PURI.SFX && window.PURI.SFX[fxName]) {
+                window.PURI.playSoundFx(window.PURI.SFX[fxName], { allowOverlap: true });
             }
-        });
+        }
 
         // Build / lock bundle (AJAX)
         function buildBundle(item_id, qty){
@@ -374,58 +410,64 @@ function puri_render_pos_page() {
             }).catch(()=> alert('AJAX error'));
         }
 
-        // Checkout flow
-        confirmChk.addEventListener('change', renderCart);
-        checkoutBtn.addEventListener('click', function(){
-            if (cart.length === 0) return;
-            if (!confirmChk.checked) return alert('Tandai bahwa data sudah benar.');
-            // Prepare payload
-            const payload = {
-                mode: 'registered',
-                items: cart,
-                total_idr: parseFloat(totalIdrEl.textContent.replace(/\./g,'')) || 0,
-                total_riyal: parseFloat(totalRiyalEl.textContent.replace(/\./g,'')) || 0,
-                cust_id: custSelect.value || ''
-            };
-            // Use FormData and send nonce
-            const fd = new FormData();
-            fd.append('action','puri_pos_execute_sale_ajax');
-            fd.append('puri_admin_nonce','<?php echo esc_js(wp_create_nonce('puri_admin_action')); ?>');
-            fd.append('mode', payload.mode);
-            fd.append('items', JSON.stringify(payload.items));
-            fd.append('total_idr', payload.total_idr);
-            fd.append('total_riyal', payload.total_riyal);
-            fd.append('cust_id', payload.cust_id);
+        // Checkbox sync
+        if (confirmChk) {
+            confirmChk.onchange = renderCart;
+        }
 
-            checkoutBtn.disabled = true;
-            checkoutBtn.textContent = 'MEMPROSES...';
+        // Checkout handler
+        if (checkoutBtn) {
+            checkoutBtn.onclick = function() {
+                if (checkoutBtn.disabled) return;
+                if (cart.length === 0) return;
+                if (!confirmChk.checked) return alert('Tandai bahwa data sudah benar.');
+                
+                const payload = {
+                    mode: 'registered',
+                    items: cart,
+                    total_idr: parseFloat(totalIdrEl.textContent.replace(/\./g,'')) || 0,
+                    total_riyal: parseFloat(totalRiyalEl.textContent.replace(/\./g,'')) || 0,
+                    cust_id: custSelect.value || ''
+                };
+                
+                const fd = new FormData();
+                fd.append('action','puri_pos_execute_sale_ajax');
+                fd.append('puri_admin_nonce','<?php echo esc_js(wp_create_nonce('puri_admin_action')); ?>');
+                fd.append('mode', payload.mode);
+                fd.append('items', JSON.stringify(payload.items));
+                fd.append('total_idr', payload.total_idr);
+                fd.append('total_riyal', payload.total_riyal);
+                fd.append('cust_id', payload.cust_id);
 
-            fetch(ajaxurl, { method:'POST', body: fd })
-                .then(r => r.json())
-                .then(res => {
-                    if (res && res.success) {
-                        if (window.PURI) window.PURI.playSoundFx(window.PURI.SFX.fx_approved, { allowOverlap:true });
-                        alert('Transaksi berhasil. Ref: ' + (res.data.ref_id || '---'));
-                        // Optionally open invoice
-                        if (res.data && res.data.ref_id) {
-                            window.open('<?php echo admin_url('admin.php?page=puri-print-invoice&ref_id='); ?>' + res.data.ref_id, '_blank');
+                checkoutBtn.disabled = true;
+                checkoutBtn.textContent = 'MEMPROSES...';
+
+                fetch(ajaxurl, { method:'POST', body: fd })
+                    .then(r => r.json())
+                    .then(res => {
+                        if (res && res.success) {
+                            playSfx('fx_approved');
+                            alert('Transaksi berhasil. Ref: ' + (res.data.ref_id || '---'));
+                            if (res.data && res.data.ref_id) {
+                                window.open('<?php echo admin_url('admin.php?page=puri-print-invoice&ref_id='); ?>' + res.data.ref_id, '_blank');
+                            }
+                            setTimeout(()=> location.reload(), 800);
+                        } else {
+                            playSfx('fx_need_attention');
+                            alert('Gagal: ' + (res && res.data && (res.data.message||res.data) ? (res.data.message||res.data) : 'unknown'));
+                            checkoutBtn.disabled = false;
+                            checkoutBtn.textContent = 'KONFIRMASI PEMBAYARAN';
                         }
-                        setTimeout(()=> location.reload(), 800);
-                    } else {
-                        if (window.PURI) window.PURI.playSoundFx(window.PURI.SFX.fx_need_attention, { allowOverlap:true });
-                        alert('Gagal: ' + (res && res.data && (res.data.message||res.data) ? (res.data.message||res.data) : 'unknown'));
+                    })
+                    .catch(()=> {
+                        alert('AJAX error');
                         checkoutBtn.disabled = false;
                         checkoutBtn.textContent = 'KONFIRMASI PEMBAYARAN';
-                    }
-                })
-                .catch(()=> {
-                    alert('AJAX error');
-                    checkoutBtn.disabled = false;
-                    checkoutBtn.textContent = 'KONFIRMASI PEMBAYARAN';
-                });
-        });
+                    });
+            };
+        }
 
-        // initial render
+        // Initial render
         renderCart();
     })();
     </script>
@@ -437,15 +479,17 @@ function puri_render_pos_page() {
    ------------------------ */
 add_action('wp_ajax_puri_pos_execute_sale_ajax', 'puri_pos_execute_sale_ajax_handler');
 function puri_pos_execute_sale_ajax_handler() {
-    // Capability: only users who can perform POS
-    if (!defined('PURI_CAP_POS') || !( current_user_can(PURI_CAP_POS) || current_user_can('manage_options') ) ) {
+    // ✅ Capability check with fallback
+    if (!(current_user_can(PURI_CAP_POS) || current_user_can('manage_options'))) {
         wp_send_json_error(['message' => 'Unauthorized']);
     }
 
     check_ajax_referer('puri_admin_action', 'puri_admin_nonce');
 
     global $wpdb;
-    if (!function_exists('puri_engine')) wp_send_json_error(['message' => 'Engine not available']);
+    if (!function_exists('puri_engine')) {
+        wp_send_json_error(['message' => 'Engine not available']);
+    }
     $puri_engine = puri_engine();
 
     // Parse & validate payload
@@ -454,12 +498,15 @@ function puri_pos_execute_sale_ajax_handler() {
     $total_idr = isset($_POST['total_idr']) ? floatval($_POST['total_idr']) : 0;
     $total_riyal = isset($_POST['total_riyal']) ? floatval($_POST['total_riyal']) : 0;
 
-    if (!is_array($items) || $total_idr <= 0) wp_send_json_error(['message' => 'Invalid sale payload']);
+    if (!is_array($items) || $total_idr <= 0) {
+        wp_send_json_error(['message' => 'Invalid sale payload']);
+    }
 
     $ref_id = 'SLS-' . date('YmdHis') . '-' . wp_rand(100,999);
     $wpdb->query('START TRANSACTION');
+    
     try {
-        // Identify or create customer if provided
+        // Identify or create customer
         $customer_id = 0;
         if ($mode === 'walk-in') {
             $wic_name = sanitize_text_field($_POST['wic_name'] ?? '');
@@ -483,57 +530,83 @@ function puri_pos_execute_sale_ajax_handler() {
             if ($qty_sold <= 0 || $item_id <= 0) throw new Exception('Invalid item in cart');
 
             if ($it['type'] === 'package') {
-                $bundle_parts[] = "Paket " + qty_sold + "x " + sanitize_text_field($it['name']);
+                // ✅ FIX: String concatenation
+                $bundle_parts[] = "Paket " . $qty_sold . "x " . sanitize_text_field($it['name']);
+                
                 $sku = sanitize_text_field($it['sku']);
                 $post_id = $wpdb->get_var($wpdb->prepare("SELECT post_id FROM {$wpdb->prefix}postmeta WHERE meta_key = 'item_sku_code' AND meta_value = %s LIMIT 1", $sku));
                 $recipe = function_exists('get_field') ? get_field('package_contents', $post_id) : null;
+                
                 if ($recipe && is_array($recipe)) {
                     foreach ($recipe as $comp) {
                         $comp_post_ref = intval($comp['p_item_ref']);
                         $c_sku = function_exists('get_field') ? get_field('item_sku_code', $comp_post_ref) : '';
                         $c_id = $wpdb->get_var($wpdb->prepare("SELECT id FROM " . puri_table_name('T_ITEMS') . " WHERE sku = %s", $c_sku));
                         $total_pcs = intval($comp['p_qty']) * $qty_sold;
+                        
                         $ok = $puri_engine->update_stock_atomic('laci_kasir', $c_id, -$total_pcs);
                         if (is_wp_error($ok)) throw new Exception($ok->get_error_message());
+                        
                         $wpdb->insert(puri_table_name('T_LEDGER'), [
-                            'location_id'=>'laci_kasir','item_id'=>$c_id,'qty_change'=>-$total_pcs,'ref_id'=>$ref_id,
-                            'description'=>'Penjualan Paket [' . sanitize_text_field($it['sku']) . '] - ' . $customer_name,'trx_date'=>current_time('mysql')
+                            'location_id'=>'laci_kasir',
+                            'item_id'=>$c_id,
+                            'qty_change'=>-$total_pcs,
+                            'ref_id'=>$ref_id,
+                            'description'=>'Penjualan Paket [' . sanitize_text_field($it['sku']) . '] - ' . $customer_name,
+                            'trx_date'=>current_time('mysql')
                         ]);
+                        
                         $res = $puri_engine->adjust_virtual_lock($c_id, -$total_pcs);
                         if (is_wp_error($res)) throw new Exception($res->get_error_message());
+                        
                         $denom_breakdown[] = ['sku'=>$c_sku,'qty_intrinsik'=>$total_pcs];
                     }
                 }
-                // adjust lock on package id itself
+                // Adjust lock on package itself
                 $puri_engine->adjust_virtual_lock($item_id, -$qty_sold);
+                
             } else {
-                // eceran
+                // Eceran
                 $ok = $puri_engine->update_stock_atomic('laci_kasir', $item_id, -$qty_sold);
                 if (is_wp_error($ok)) throw new Exception($ok->get_error_message());
+                
                 $wpdb->insert(puri_table_name('T_LEDGER'), [
-                    'location_id'=>'laci_kasir','item_id'=>$item_id,'qty_change'=>-$qty_sold,'ref_id'=>$ref_id,
-                    'description'=>'Penjualan Eceran - ' . $customer_name,'trx_date'=>current_time('mysql')
+                    'location_id'=>'laci_kasir',
+                    'item_id'=>$item_id,
+                    'qty_change'=>-$qty_sold,
+                    'ref_id'=>$ref_id,
+                    'description'=>'Penjualan Eceran - ' . $customer_name,
+                    'trx_date'=>current_time('mysql')
                 ]);
+                
                 $net_rate = floatval($it['rate']) - floatval($it['discount_rate'] ?? 0);
-                $eceran_parts[] = "(" + $qty_sold + "x " + sanitize_text_field($it['sku']) + " @" + number_format($net_rate) + ")";
+                // ✅ FIX: String concatenation
+                $eceran_parts[] = "(" . $qty_sold . "x " . sanitize_text_field($it['sku']) . " @" . number_format($net_rate) . ")";
                 $denom_breakdown[] = ['sku'=>$it['sku'],'qty_intrinsik'=>$qty_sold];
             }
         }
 
-        $desc = implode(' | ', array_filter([eceran_parts.join(' • '), bundle_parts.join(' • ')]));
+        // ✅ FIX: Use implode with proper array
+        $desc = implode(' | ', array_filter(array_merge($eceran_parts, $bundle_parts)));
 
         $resDebit = $puri_engine->post_journal($ref_id, '1101', $total_idr, 0, $desc);
         if (is_wp_error($resDebit)) throw new Exception($resDebit->get_error_message());
+        
         $resCredit = $puri_engine->post_journal($ref_id, '4100', 0, $total_idr, $desc, [
-            'customer' => $customer_name, 'total_riyal' => $total_riyal,
-            'total_idr' => $total_idr, 'items' => $items, 'inventory_explode' => $denom_breakdown
+            'customer' => $customer_name, 
+            'total_riyal' => $total_riyal,
+            'total_idr' => $total_idr, 
+            'items' => $items, 
+            'inventory_explode' => $denom_breakdown
         ]);
         if (is_wp_error($resCredit)) throw new Exception($resCredit->get_error_message());
 
         $wpdb->query('COMMIT');
         wp_send_json_success(['message'=>'Lunas','ref_id'=>$ref_id]);
+        
     } catch (Exception $e) {
         $wpdb->query('ROLLBACK');
+        error_log('PURI POS Sale Error: ' . $e->getMessage());
         wp_send_json_error(['message'=>'Sale failed: ' . $e->getMessage()]);
     }
 }
@@ -543,37 +616,57 @@ function puri_pos_execute_sale_ajax_handler() {
    ------------------------ */
 add_action('wp_ajax_puri_pos_build_bundle_ajax', 'puri_pos_build_bundle_ajax_handler');
 function puri_pos_build_bundle_ajax_handler() {
-    // Capability check
-    if (!defined('PURI_CAP_POS') || !( current_user_can(PURI_CAP_POS) || current_user_can('manage_options') ) ) {
+    // ✅ Capability check with fallback
+    if (!(current_user_can(PURI_CAP_POS) || current_user_can('manage_options'))) {
         wp_send_json_error(['message' => 'Unauthorized']);
     }
 
     check_ajax_referer('puri_admin_action', 'puri_admin_nonce');
 
     global $wpdb;
-    if (!function_exists('puri_engine')) wp_send_json_error(['message' => 'Engine not available']);
+    if (!function_exists('puri_engine')) {
+        wp_send_json_error(['message' => 'Engine not available']);
+    }
     $puri_engine = puri_engine();
+	$bundle_sql_id = intval($_POST['item_id'] ?? 0);
+$qty_to_lock = intval($_POST['qty'] ?? 0);
 
-    $bundle_sql_id = intval($_POST['item_id'] ?? 0);
-    $qty_to_lock = intval($_POST['qty'] ?? 0);
-    if ($bundle_sql_id <= 0 || $qty_to_lock <= 0) wp_send_json_error(['message' => 'Invalid input']);
+if ($bundle_sql_id <= 0 || $qty_to_lock <= 0) {
+    wp_send_json_error(['message' => 'Invalid input']);
+}
 
+try {
     $sku = $wpdb->get_var($wpdb->prepare("SELECT sku FROM " . puri_table_name('T_ITEMS') . " WHERE id = %d", $bundle_sql_id));
     $post_id = $wpdb->get_var($wpdb->prepare("SELECT post_id FROM {$wpdb->prefix}postmeta WHERE meta_key = 'item_sku_code' AND meta_value = %s LIMIT 1", $sku));
     $recipe = function_exists('get_field') ? get_field('package_contents', $post_id) : null;
-    if (!$recipe) wp_send_json_error(['message' => 'Resep kosong.']);
+    
+    if (!$recipe) {
+        wp_send_json_error(['message' => 'Resep kosong.']);
+    }
 
     foreach ($recipe as $comp) {
         $comp_post_ref = intval($comp['p_item_ref']);
         $c_sku = function_exists('get_field') ? get_field('item_sku_code', $comp_post_ref) : '';
         $c_id = $wpdb->get_var($wpdb->prepare("SELECT id FROM " . puri_table_name('T_ITEMS') . " WHERE sku = %s", $c_sku));
         $total_lock = intval($comp['p_qty']) * $qty_to_lock;
+        
         $res = $puri_engine->adjust_virtual_lock($c_id, $total_lock);
-        if (is_wp_error($res)) wp_send_json_error(['message' => $res->get_error_message()]);
+        if (is_wp_error($res)) {
+            wp_send_json_error(['message' => $res->get_error_message()]);
+        }
     }
+    
     // Lock package id
     $res2 = $puri_engine->adjust_virtual_lock($bundle_sql_id, $qty_to_lock);
-    if (is_wp_error($res2)) wp_send_json_error(['message' => $res2->get_error_message()]);
+    if (is_wp_error($res2)) {
+        wp_send_json_error(['message' => $res2->get_error_message()]);
+    }
 
     wp_send_json_success(['message' => "Sukses mengunci {$qty_to_lock} paket ke dalam laci."]);
+    
+} catch (Exception $e) {
+    error_log('PURI POS Bundle Error: ' . $e->getMessage());
+    wp_send_json_error(['message' => 'Bundle lock failed: ' . $e->getMessage()]);
 }
+}
+	
