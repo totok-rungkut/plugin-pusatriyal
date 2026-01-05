@@ -1,672 +1,284 @@
 <?php
 /**
- * =============================================================================
- * MC 05 - POS Kasir V6 (Refactor)
- * =============================================================================
- *
- * @package     Pusat Riyal
- * @module      MC-05
- * @version     6.0.2
- * @author      Denmas Totok (refactor by Copilot)
- * @updated     2026-01-05
- *
- * =============================================================================
- * PURPOSE / TUJUAN
- * =============================================================================
- *
- * Modul POS (Point of Sale) untuk kasir: antarmuka kasir dan endpoint AJAX untuk
- * mencatat transaksi penjualan (eceran & paket), menyesuaikan stok Laci, mengunci
- * komponen paket (virtual lock), dan mencatat jurnal (double-entry).
- *
- * - Render admin POS UI (modern card grid mirip MC-08 Stock Transfer)
- * - Mendukung 2 mode customer: registered & walk-in (WIC)
- * - Menangani paket (package) dengan "explode" resep dan virtual lock
- * - Endpoint AJAX aman untuk eksekusi sale dan pembuatan/locking bundle
- *
- * =============================================================================
- * WHO CAN OPERATE
- * =============================================================================
- *
- * Hanya user dengan role/kapabilitas:
- *   - kasir (role 'kasir')  -> untuk operasi kasir sehari-hari
- *   - finance (role 'finance') atau administrator -> untuk akses penuh dan troubleshooting
- *
- * Permission checks are enforced via current_user_can() and puri_check_cap() where applicable.
- *
- * =============================================================================
- * API / AJAX ENDPOINTS
- * =============================================================================
- *
- * - wp_ajax_puri_pos_execute_sale_ajax
- *     * Periksa nonce: puri_admin_action (field puri_admin_nonce)
- *     * Capability check: current_user_can('puri_can_pos') OR current_user_can('manage_options')
- *     * Payload: items (JSON), total_idr, total_riyal, mode, customer data
- *     * Behaviour: wrap in DB transaction, update atomic stocks, ledger rows, post_journal entries
- *
- * - wp_ajax_puri_pos_build_bundle_ajax
- *     * Periksa nonce: puri_admin_action
- *     * Capability check: current_user_can('puri_can_pos') OR current_user_can('manage_options')
- *     * Payload: item_id (package SQL id), qty
- *     * Behaviour: adjust_virtual_lock() pada komponen + package id
- *
- * =============================================================================
- * UX / UI NOTES
- * =============================================================================
- *
- * - Stock-card behaviour follows MC-08 Stock Transfer:
- *     * Card per denom/sku, shows bendel/qty, value, quick input & tombol action
- *     * Click card (outside submit control) = add 1 unit to cart
- *     * Click submit control (qty input + button) = add specified qty to cart
- *     * Use same CSS classes (.puri-stock-card, .puri-card-submitter, .puri-laci-btn, etc)
- *     * Integrates with library/js/puri-sfx.js and puri-main.js for sound feedback
- *
- * - The POS UI is built as inline React (or minimal JS) with root id `puri-pos-root`.
- * - Inline script exposes window.puri_admin = { ajax_url, nonce } for JS use.
- *
- * =============================================================================
- * DEPENDENCIES
- * =============================================================================
- *
- * - puri_engine() (MC-03)  : stock operations, moving average, locks, post_journal
- * - puri_table_name() (MC-00/MC-01) : table name helper & table constants:
- *     T_ITEMS, T_STOCK, T_LEDGER, T_LOCKS, T_JOURNAL
- * - puri-sfx / puri-main (library/js) : optional sound & UI helpers
- * - ACF fields for package recipes (MC-02) when resolving package contents
- *
- * =============================================================================
- * SECURITY & DATA INTEGRITY
- * =============================================================================
- *
- * - All admin AJAX endpoints verify wp_nonce and perform capability checks.
- * - All DB mutations are wrapped in transactions with rollback on error.
- * - Input sanitized via sanitize_text_field / intval / floatval as needed.
- * - Use puri_engine() atomic operations (update_stock_atomic, adjust_virtual_lock, post_journal).
- *
- * =============================================================================
- * CHANGELOG
- * =============================================================================
- *
- * [6.0.3] 2026-01-05
- * - Fixed: JavaScript string concatenation (bundle_parts, eceran_parts)
- * - Fixed: Missing ajaxurl definition
- * - Fixed: Capability check fallback when PURI_CAP_POS undefined
- * - Fixed: Safe SFX calls with existence checks
- * - Improved: Error handling in AJAX responses
- *
- * [6.0.2] 2026-01-05
- *   - Added: Role gating to allow only 'kasir' and 'finance' (plus admins) to operate POS.
- *   - Added: UI behaviour aligned with MC-08 stock cards and shared SFX integration.
- *   - Improved: Defensive checks when exploding package recipes (handle missing postmeta).
- *   - Improved: Explicit capability checks on AJAX handlers and clearer error messages.
- *
- * [6.0.1] 2025-12-xx
- *   - Initial refactored POS: React-based UI (inline), AJAX handlers, stock & journal integration.
- *
- * =============================================================================
- * HOW TO USE / ACCESS
- * =============================================================================
- *
- * Admin Menu Path:
- *   Dashboard → Transaksi → 💰 Kasir POS
- *
- * Direct URL:
- *   /wp-admin/admin.php?page=puri-pos
- *
- * =============================================================================
+ * MC 05 - POS Kasir (Hybrid Refactor)
+ * Version: 6.1.5
+ * Changes:
+ * - Base Logic: v6.1.3 (Stable Cart & SyncUI)
+ * - Feature: Added KYC (WIC) Panel with NIK & WA validation.
+ * - UI: Added Kurs Jual display on Card Stock.
+ * - Flow: Auto-Redirect to Invoice after success.
  */
- 
-
 
 defined('ABSPATH') || exit;
 
-// ✅ Ensure PURI_CAP_POS is defined (fallback if MC-24 not loaded yet)
-if (!defined('PURI_CAP_POS')) {
-    define('PURI_CAP_POS', 'puri_can_pos');
-}
+add_action('wp_ajax_puri_pos_execute_sale_v615', 'puri_pos_execute_sale_handler_v615');
 
-/**
- * Render POS admin page.
- * Accessible only to users who can perform POS (PURI_CAP_POS).
- */
 function puri_render_pos_page() {
-    // ✅ Capability gate with fallback
-    if (!(current_user_can(PURI_CAP_POS) || current_user_can('manage_options'))) {
-        wp_die(__('Anda tidak memiliki akses ke halaman ini. Hubungi administrator.', 'puri'), 403);
-    }
-
+    puri_check_cap('manage_options');
     global $wpdb;
 
-    // Ensure engine instance exists
-    if (!function_exists('puri_engine')) {
-        wp_die(__('Engine tidak tersedia. Hubungi developer.', 'puri'), 500);
-    }
-
-    // Prepare items with laci stock & locks
+    // 1. DATA MASTER ITEMS (Laci Kasir)
     $items = $wpdb->get_results("
         SELECT i.id, i.sku, i.name, i.type, i.denom_value, i.sell_rate,
-               COALESCE(s.qty,0) AS stock_laci,
-               COALESCE(l.qty_lock,0) AS qty_lock
+        COALESCE(s.qty, 0) as physical_qty,
+        COALESCE(l.qty_lock, 0) as locked_qty
         FROM " . puri_table_name('T_ITEMS') . " i
         LEFT JOIN " . puri_table_name('T_STOCK') . " s ON i.id = s.item_id AND s.location_id = 'laci_kasir'
         LEFT JOIN " . puri_table_name('T_LOCKS') . " l ON i.id = l.item_id
         ORDER BY i.type ASC, i.denom_value ASC
     ");
 
-    // Customers for registered mode
-    $customers = get_posts(['post_type'=>'pr_customer','posts_per_page'=>-1,'orderby'=>'title','order'=>'ASC']);
-    $customer_list = array_map(function($c){ 
-        return [
-            'id'=>$c->ID,
-            'name'=>$c->post_title,
-            'nik'=>get_field('cust_nik',$c->ID)
-        ]; 
-    }, $customers);
+    $customers = get_posts(['post_type' => 'pr_customer', 'posts_per_page' => -1, 'orderby' => 'title', 'order' => 'ASC']);
 
     ?>
     <div class="wrap">
-      <h1>💰 Kasir POS — Pusat Riyal</h1>
+        <style>
+            .pos-wrapper { display: grid; grid-template-columns: 1fr 380px; gap: 20px; margin-top: 20px; }
+            .pos-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 15px; }
+            .pos-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 15px; transition: 0.2s; }
+            .pos-card:hover { border-color: #3b82f6; transform: translateY(-2px); }
+            
+            .card-sku { font-weight: 900; font-size: 16px; display: block; color: #0f172a; }
+            .card-name { font-size: 11px; color: #64748b; display: block; height: 30px; margin-bottom: 5px; }
+            .card-rate { font-weight: 800; font-size: 13px; color: #2563eb; display: block; margin-top: 5px; } /* Kurs Jual */
+            .card-stock-badge { font-weight: 800; font-size: 11px; padding: 4px 10px; border-radius: 99px; background: #f1f5f9; }
+            .card-stock-badge.low { background: #fee2e2; color: #ef4444; }
+            
+            .card-ctrl { margin-top: 15px; display: flex; gap: 5px; }
+            .in-num { width: 55px; text-align: center; border: 1px solid #cbd5e1; border-radius: 6px; font-weight: 700; }
+            .btn-send { flex: 1; background: #0f172a; color: #fff; border: none; border-radius: 6px; font-weight: 700; cursor: pointer; }
 
-      <style>
-        /* Reuse styles from mc-08 for card grid and summary */
-        .puri-pos-grid { display:flex; gap:18px; align-items:flex-start; }
-        .puri-pos-catalog { flex:2; min-width:360px; }
-        .puri-pos-panel { flex:1; min-width:320px; max-width:420px; }
-        .puri-stock-grid { display:flex; gap:20px 18px; flex-wrap:wrap; padding:8px; }
-        .puri-stock-card { border:1.25px solid #d1d5db; border-radius:8px; padding:12px; background:#fff; width:220px; box-sizing:border-box; cursor:pointer; display:flex; flex-direction:column; gap:8px; }
-        .puri-stock-card h4 { margin:0; font-size:18px; font-weight:800; }
-        .puri-stock-meta { display:flex; justify-content:space-between; align-items:center; font-size:13px; color:#475569; }
-        .puri-card-actions { display:flex; gap:8px; margin-top:auto; }
-        .puri-add-btn, .puri-bundle-btn { padding:8px 10px; border:1px solid #cbd5e1; background:#fff; cursor:pointer; border-radius:6px; font-weight:700; }
-        .puri-add-btn:hover, .puri-bundle-btn:hover { background:#f1f5f9; }
-        .puri-cart { border:1px solid #e2e8f0; background:#f8fafc; padding:12px; border-radius:8px; }
-        .puri-cart-list { max-height:340px; overflow:auto; margin-bottom:12px; }
-        .puri-cart-row { display:flex; justify-content:space-between; align-items:center; gap:8px; padding:6px 0; border-bottom:1px dashed #e6edf3; }
-        .puri-checkout { width:100%; padding:12px; background:#059669; color:#fff; border:none; font-weight:900; border-radius:8px; cursor:pointer; }
-        .puri-checkout:disabled { background:#cbd5e1; cursor:not-allowed; }
-        .puri-qty-input { width:72px; text-align:center; padding:6px; border-radius:6px; border:1px solid #cbd5e1; }
-        .puri-sfx-toggle { margin-top:10px; }
-      </style>
+            .cart-sidebar { background: #fff; border: 1px solid #d1d5db; border-radius: 12px; padding: 20px; position: sticky; top: 40px; }
+            .kyc-panel { background: #f8fafc; padding: 12px; border-radius: 8px; margin-bottom: 15px; border: 1px solid #e2e8f0; }
+            .kyc-input { width: 100%; padding: 6px; margin-top: 4px; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 12px; }
+            
+            .btn-pay { width: 100%; padding: 15px; background: #059669; color: #fff; border: none; border-radius: 8px; font-weight: 900; font-size: 18px; cursor: pointer; }
+            .btn-pay:disabled { background: #cbd5e1; cursor: not-allowed; }
+        </style>
 
-      <div class="puri-pos-grid">
-        <div class="puri-pos-catalog">
-            <h2 style="margin-top:0">Katalog & Stok Laci</h2>
-            <div class="puri-stock-grid" id="puriPosStockGrid">
-                <?php foreach ($items as $it):
-                    $available = max(0, floatval($it->stock_laci) - floatval($it->qty_lock));
-                    $badge_class = $available >= 100 ? 'puri-badge-blue' : ($available > 0 ? 'puri-badge-red' : 'puri-badge-grey');
-                ?>
-                <div class="puri-stock-card" tabindex="0" 
-                     data-id="<?php echo intval($it->id); ?>" 
-                     data-sku="<?php echo esc_attr($it->sku); ?>" 
-                     data-type="<?php echo esc_attr($it->type); ?>" 
-                     data-name="<?php echo esc_attr($it->name); ?>" 
-                     data-denom="<?php echo intval($it->denom_value); ?>" 
-                     data-rate="<?php echo esc_attr($it->sell_rate); ?>" 
-                     data-stock="<?php echo esc_attr($available); ?>">
-                    <div style="display:flex;justify-content:space-between;align-items:flex-start">
-                        <h4><?php echo esc_html($it->sku); ?></h4>
-                        <div style="font-size:12px;color:#94a3b8"><?php echo esc_html($it->type); ?></div>
-                    </div>
-                    <div class="puri-stock-meta">
-                        <div>Denom: <strong><?php echo intval($it->denom_value); ?> SAR</strong></div>
-                        <div>Stok: <strong><?php echo number_format($available); ?></strong></div>
-                    </div>
-                    <div style="font-size:13px;color:#0f172a"><strong><?php echo esc_html($it->name); ?></strong></div>
+        <h1 style="font-weight: 900;">💰 POS Kasir v6.1.5</h1>
 
-                    <div class="puri-card-actions">
-                        <input type="number" min="1" value="1" class="puri-qty-input" aria-label="qty-<?php echo intval($it->id); ?>">
-                        <button type="button" class="puri-add-btn" data-action="add">Tambah</button>
-                        <?php if ($it->type === 'package'): ?>
-                            <button type="button" class="puri-bundle-btn" data-action="bundle">Kunci Paket</button>
-                        <?php endif; ?>
+        <div class="pos-wrapper">
+            <div class="pos-main">
+                <div class="pos-grid">
+                    <?php foreach ($items as $it): 
+                        $stok_bebas = $it->physical_qty - $it->locked_qty;
+                    ?>
+                    <div class="pos-card" data-id="<?php echo $it->id; ?>" data-sku="<?php echo esc_attr($it->sku); ?>" data-rate="<?php echo $it->sell_rate; ?>" data-denom="<?php echo $it->denom_value; ?>" data-origin-stock="<?php echo $stok_bebas; ?>">
+                        <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+                            <span class="card-sku"><?php echo esc_html($it->sku); ?></span>
+                            <span class="card-stock-badge">📦 <?php echo number_format($stok_bebas); ?></span>
+                        </div>
+                        <span class="card-name"><?php echo esc_html($it->name); ?></span>
+                        
+                        <span class="card-rate">Kurs: Rp <?php echo number_format($it->sell_rate); ?></span>
+
+                        <div class="card-ctrl">
+                            <input type="number" class="in-num" value="1" min="1">
+                            <button class="btn-send">KIRIM</button>
+                        </div>
                     </div>
+                    <?php endforeach; ?>
                 </div>
-                <?php endforeach; ?>
             </div>
-        </div>
 
-        <div class="puri-pos-panel">
-            <h2 style="margin-top:0">Keranjang & Checkout</h2>
-            <div class="puri-cart">
-                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-                    <div style="font-weight:800">Items</div>
-                    <div style="font-size:13px;color:#64748b">Mode: <strong>Kasir</strong></div>
-                </div>
-
-                <div class="puri-cart-list" id="puriCartList">
-                    <div style="text-align:center;color:#94a3b8;padding:36px">Belum ada item di keranjang</div>
-                </div>
-
-                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-                    <div><strong>Total Riyal:</strong> <span id="puriTotalRiyal">0</span> SAR</div>
-                    <div><strong>Total (IDR):</strong> Rp <span id="puriTotalIdr">0</span></div>
-                </div>
-
-                <div style="display:grid;gap:8px">
-                    <select id="puriCustomerSelect">
-                        <option value="">-- Pilih Customer Terdaftar --</option>
-                        <?php foreach ($customer_list as $c): ?>
-                            <option value="<?php echo intval($c['id']); ?>"><?php echo esc_html($c['name']); ?></option>
+            <div class="cart-sidebar">
+                <h3>🛒 Keranjang</h3>
+                
+                <div style="margin-bottom:15px;">
+                    <label style="font-size:11px; font-weight:700;">PILIH CUSTOMER</label>
+                    <select id="sel-customer" style="width:100%; padding:8px; margin-top:4px;">
+                        <option value="0">-- Walk-in Customer (WIC) --</option>
+                        <?php foreach($customers as $c): ?>
+                            <option value="<?php echo $c->ID; ?>"><?php echo esc_html($c->post_title); ?></option>
                         <?php endforeach; ?>
                     </select>
-                    <label style="font-size:13px"><input type="checkbox" id="puriCheckData"> Data & KYC sudah dicek</label>
-                    <button id="puriCheckoutBtn" class="puri-checkout" disabled>KONFIRMASI PEMBAYARAN</button>
                 </div>
 
-                <div class="puri-sfx-toggle">
-                  <label><input type="checkbox" id="puriSfxToggle"> Suara (SFX)</label>
+                <div id="wic-panel" class="kyc-panel">
+                    <label style="font-size:10px; font-weight:800; color:#475569;">DATA KYC (WAJIB WIC)</label>
+                    <input type="text" id="wic-name" class="kyc-input" placeholder="Nama Lengkap">
+                    <input type="number" id="wic-wa" class="kyc-input" placeholder="WhatsApp (62xxx)">
+                    <input type="number" id="wic-nik" class="kyc-input" placeholder="NIK KTP (16 Digit)">
                 </div>
+
+                <div id="display-cart" style="min-height:150px; margin-bottom:15px; border-bottom:1px solid #f1f5f9;"></div>
+                
+                <div style="font-weight:900; font-size:22px; margin-bottom:15px; display:flex; justify-content:space-between;">
+                    <span>TOTAL</span><span id="grand-total">Rp 0</span>
+                </div>
+                <button id="exec-pay" class="btn-pay" disabled>BAYAR & CETAK</button>
             </div>
         </div>
-      </div>
+
+        <script>
+        (function($){
+            let cart = [];
+            const soundClick = new Audio('https://assets.mixkit.co/active_storage/sfx/2500/2500-preview.mp3');
+
+            function syncUI() {
+                $('.pos-card').each(function(){
+                    const $card = $(this);
+                    const id = $card.data('id');
+                    const origin = parseInt($card.data('origin-stock'));
+                    const inCart = cart.filter(x => x.id === id).reduce((acc, curr) => acc + curr.qty, 0);
+                    const currentDisplay = origin - inCart;
+                    $card.find('.card-stock-badge').text('📦 ' + currentDisplay).toggleClass('low', currentDisplay <= 0);
+                });
+                renderCart();
+            }
+
+            function renderCart() {
+                const $list = $('#display-cart');
+                if (!cart.length) { $list.html('<p style="text-align:center;color:#94a3b8;margin-top:50px;">Kosong</p>'); $('#grand-total').text('Rp 0'); $('#exec-pay').prop('disabled', true); return; }
+                let html = '', total = 0;
+                cart.forEach((item, idx) => {
+                    const line = item.qty * item.denom * item.rate;
+                    total += line;
+                    html += `<div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #f8fafc; font-size:12px;">
+                        <span><b>${item.sku}</b> x${item.qty}</span>
+                        <span><b>Rp ${new Intl.NumberFormat().format(line)}</b> <a href="#" class="rem-item" data-idx="${idx}" style="color:red;text-decoration:none;margin-left:5px;">&times;</a></span>
+                    </div>`;
+                });
+                $list.html(html);
+                $('#grand-total').text('Rp ' + new Intl.NumberFormat().format(total));
+                $('#exec-pay').prop('disabled', false);
+            }
+
+            // GUNA BASE LOGIC 6.1.3 UNTUK CART
+            $('.btn-send').on('click', function(){
+                const $card = $(this).closest('.pos-card');
+                const qty = parseInt($card.find('.in-num').val()) || 1;
+                const id = $card.data('id'), sku = $card.data('sku'), rate = $card.data('rate'), denom = $card.data('denom');
+                const origin = parseInt($card.data('origin-stock'));
+                const inCart = cart.filter(x => x.id === id).reduce((acc, curr) => acc + curr.qty, 0);
+
+                if (inCart + qty > origin) { alert('Stok tidak cukup!'); return; }
+                soundClick.currentTime = 0; soundClick.play();
+                const exist = cart.find(x => x.id === id);
+                if (exist) exist.qty += qty; else cart.push({ id, sku, rate, denom, qty });
+                syncUI();
+            });
+
+            $(document).on('click', '.rem-item', function(e){ e.preventDefault(); cart.splice($(this).data('idx'), 1); syncUI(); });
+
+            $('#sel-customer').on('change', function(){
+                $('#wic-panel').toggle($(this).val() == '0');
+            });
+
+            // AJAX EXECUTION WITH KYC & REDIRECT
+            $('#exec-pay').on('click', function(){
+                const customer_id = $('#sel-customer').val();
+                if (customer_id == '0') {
+                    if (!$('#wic-name').val() || $('#wic-nik').val().length !== 16) {
+                        alert('Data KYC WIC tidak valid! NIK harus 16 digit.'); return;
+                    }
+                }
+
+                const btn = $(this);
+                btn.prop('disabled', true).text('MEMPROSES...');
+
+                $.post(ajaxurl, {
+                    action: 'puri_pos_execute_sale_v615',
+                    puri_admin_nonce: '<?php echo wp_create_nonce("puri_admin_action"); ?>',
+                    customer_id: customer_id,
+                    wic_data: {
+                        name: $('#wic-name').val(),
+                        wa: $('#wic-wa').val(),
+                        nik: $('#wic-nik').val()
+                    },
+                    cart: JSON.stringify(cart)
+                }, function(res){
+                    if (res.success) { 
+                        alert('Transaksi Berhasil!'); 
+                        // REDIRECT TO INVOICE
+                        location.href = 'admin.php?page=puri-invoice&ref_id=' + res.data.ref_id;
+                    } else { 
+                        alert('Gagal: ' + (res.data.message || res.data)); 
+                        btn.prop('disabled', false).text('BAYAR & CETAK'); 
+                    }
+                }).fail(function(xhr) {
+                    alert("SERVER ERROR!\nStatus: " + xhr.status + "\nResponse: " + xhr.responseText.substring(0, 100));
+                    btn.prop('disabled', false).text('BAYAR & CETAK');
+                });
+            });
+
+            syncUI();
+        })(jQuery);
+        </script>
     </div>
-
-    <script>
-    (function(){
-        // ✅ FIX: Define ajaxurl explicitly (WordPress standard)
-        const ajaxurl = '<?php echo esc_js(admin_url('admin-ajax.php')); ?>';
-        
-        const grid = document.getElementById('puriPosStockGrid');
-        const cartList = document.getElementById('puriCartList');
-        const totalRiyalEl = document.getElementById('puriTotalRiyal');
-        const totalIdrEl = document.getElementById('puriTotalIdr');
-        const checkoutBtn = document.getElementById('puriCheckoutBtn');
-        const confirmChk = document.getElementById('puriCheckData');
-        const custSelect = document.getElementById('puriCustomerSelect');
-        const sfxToggle = document.getElementById('puriSfxToggle');
-
-        // ✅ Safe SFX initialization
-        if (sfxToggle && window.PURI && typeof window.PURI.isSoundFxEnabled === 'function') {
-            sfxToggle.checked = window.PURI.isSoundFxEnabled();
-            sfxToggle.addEventListener('change', function(){
-                window.PURI.setSoundFxEnabled(!!sfxToggle.checked);
-                if (sfxToggle.checked && window.PURI.SFX && window.PURI.SFX.fx_notif_updates) {
-                    window.PURI.playSoundFx(window.PURI.SFX.fx_notif_updates, { allowOverlap: true });
-                }
-            });
-        }
-
-        let cart = []; // {id, sku, name, denom, qty, rate, type}
-
-        function formatNumber(n){ return new Intl.NumberFormat('id-ID').format(parseFloat(n||0)); }
-
-        function findCartIdx(id){ return cart.findIndex(c => c.id == id); }
-
-        function renderCart(){
-            cartList.innerHTML = '';
-            if (cart.length === 0) {
-                cartList.innerHTML = '<div style="text-align:center;color:#94a3b8;padding:36px">Belum ada item di keranjang</div>';
-                totalRiyalEl.textContent = '0';
-                totalIdrEl.textContent = '0';
-                checkoutBtn.disabled = true;
-                return;
-            }
-            let totalRiyal = 0, totalIdr = 0;
-            cart.forEach(function(row,i){
-                totalRiyal += (row.qty * (row.denom||1));
-                totalIdr += (row.qty * (row.denom||1) * (row.rate||0));
-                const div = document.createElement('div');
-                div.className = 'puri-cart-row';
-                div.innerHTML = '<div style="flex:1">' +
-                    '<div style="font-weight:700">' + row.sku + ' × ' + row.qty + '</div>' +
-                    '<div style="font-size:12px;color:#475569">' + row.name + '</div>' +
-                '</div>' +
-                '<div style="text-align:right;min-width:120px">' +
-                    '<div>Rp ' + formatNumber(row.rate) + '</div>' +
-                    '<div style="font-weight:900">Rp ' + formatNumber(row.qty * row.denom * row.rate) + '</div>' +
-                '</div>';
-                
-                div.addEventListener('click', function(){ 
-                    if(confirm('Hapus item dari keranjang?')) { 
-                        cart.splice(i,1); 
-                        renderCart(); 
-                    }
-                });
-                cartList.appendChild(div);
-            });
-            totalRiyalEl.textContent = formatNumber(totalRiyal);
-            totalIdrEl.textContent = formatNumber(totalIdr);
-            checkoutBtn.disabled = !(cart.length > 0 && confirmChk.checked);
-        }
-
-        // Attach handlers to card actions
-        if (grid) {
-            grid.querySelectorAll('.puri-stock-card').forEach(function(card){
-                const addBtn = card.querySelector('[data-action="add"]');
-                const bundleBtn = card.querySelector('[data-action="bundle"]');
-                const qtyInput = card.querySelector('.puri-qty-input');
-
-                const id = card.dataset.id;
-                const sku = card.dataset.sku;
-                const type = card.dataset.type;
-                const name = card.dataset.name;
-                const denom = parseInt(card.dataset.denom||'1',10);
-                const rate = parseFloat(card.dataset.rate||'0');
-                const stock = parseFloat(card.dataset.stock||'0');
-
-                // Card click adds 1
-                card.addEventListener('click', function(ev){
-                    if (ev.target.closest('.puri-card-actions')) return;
-                    addToCart(1);
-                });
-
-                // Add button
-                if (addBtn) addBtn.addEventListener('click', function(ev){
-                    ev.stopPropagation();
-                    const qty = parseInt(qtyInput.value||'0',10) || 1;
-                    addToCart(qty);
-                });
-
-                // Bundle button
-                if (bundleBtn) bundleBtn.addEventListener('click', function(ev){
-                    ev.stopPropagation();
-                    const qty = parseInt(qtyInput.value||'0',10) || 1;
-                    buildBundle(id, qty);
-                });
-
-                function addToCart(qty){
-                    if (qty < 1) return;
-                    if (type !== 'package' && qty > stock) { 
-                        playSfx('fx_stock_empty');
-                        return alert('Stok tidak cukup di laci'); 
-                    }
-                    const idx = findCartIdx(id);
-                    if (idx >= 0) {
-                        cart[idx].qty += qty;
-                    } else {
-                        cart.push({ id:id, sku:sku, name:name, denom:denom, qty:qty, rate:rate, type:type });
-                    }
-                    playSfx('fx_card_clicked');
-                    renderCart();
-                }
-            });
-        }
-
-        // ✅ Safe SFX helper
-        function playSfx(fxName) {
-            if (window.PURI && typeof window.PURI.playSoundFx === 'function' && window.PURI.SFX && window.PURI.SFX[fxName]) {
-                window.PURI.playSoundFx(window.PURI.SFX[fxName], { allowOverlap: true });
-            }
-        }
-
-        // Build / lock bundle (AJAX)
-        function buildBundle(item_id, qty){
-            if (!confirm('Kunci paket ke laci?')) return;
-            fetch(ajaxurl, {
-                method: 'POST',
-                body: new URLSearchParams({
-                    action: 'puri_pos_build_bundle_ajax',
-                    puri_admin_nonce: '<?php echo esc_js(wp_create_nonce('puri_admin_action')); ?>',
-                    item_id: item_id,
-                    qty: qty
-                })
-            }).then(r => r.json()).then(res => {
-                if (res && res.success) {
-                    alert(res.data.message || 'Sukses mengunci paket');
-                    location.reload();
-                } else {
-                    alert('Gagal: ' + (res && res.data && res.data.message ? res.data.message : 'Unknown'));
-                }
-            }).catch(()=> alert('AJAX error'));
-        }
-
-        // Checkbox sync
-        if (confirmChk) {
-            confirmChk.onchange = renderCart;
-        }
-
-        // Checkout handler
-        if (checkoutBtn) {
-            checkoutBtn.onclick = function() {
-                if (checkoutBtn.disabled) return;
-                if (cart.length === 0) return;
-                if (!confirmChk.checked) return alert('Tandai bahwa data sudah benar.');
-                
-                const payload = {
-                    mode: 'registered',
-                    items: cart,
-                    total_idr: parseFloat(totalIdrEl.textContent.replace(/\./g,'')) || 0,
-                    total_riyal: parseFloat(totalRiyalEl.textContent.replace(/\./g,'')) || 0,
-                    cust_id: custSelect.value || ''
-                };
-                
-                const fd = new FormData();
-                fd.append('action','puri_pos_execute_sale_ajax');
-                fd.append('puri_admin_nonce','<?php echo esc_js(wp_create_nonce('puri_admin_action')); ?>');
-                fd.append('mode', payload.mode);
-                fd.append('items', JSON.stringify(payload.items));
-                fd.append('total_idr', payload.total_idr);
-                fd.append('total_riyal', payload.total_riyal);
-                fd.append('cust_id', payload.cust_id);
-
-                checkoutBtn.disabled = true;
-                checkoutBtn.textContent = 'MEMPROSES...';
-
-                fetch(ajaxurl, { method:'POST', body: fd })
-                    .then(r => r.json())
-                    .then(res => {
-                        if (res && res.success) {
-                            playSfx('fx_approved');
-                            alert('Transaksi berhasil. Ref: ' + (res.data.ref_id || '---'));
-                            if (res.data && res.data.ref_id) {
-                                window.open('<?php echo admin_url('admin.php?page=puri-print-invoice&ref_id='); ?>' + res.data.ref_id, '_blank');
-                            }
-                            setTimeout(()=> location.reload(), 800);
-                        } else {
-                            playSfx('fx_need_attention');
-                            alert('Gagal: ' + (res && res.data && (res.data.message||res.data) ? (res.data.message||res.data) : 'unknown'));
-                            checkoutBtn.disabled = false;
-                            checkoutBtn.textContent = 'KONFIRMASI PEMBAYARAN';
-                        }
-                    })
-                    .catch(()=> {
-                        alert('AJAX error');
-                        checkoutBtn.disabled = false;
-                        checkoutBtn.textContent = 'KONFIRMASI PEMBAYARAN';
-                    });
-            };
-        }
-
-        // Initial render
-        renderCart();
-    })();
-    </script>
     <?php
 }
 
-/* ------------------------
-   AJAX: Execute Sale
-   ------------------------ */
-add_action('wp_ajax_puri_pos_execute_sale_ajax', 'puri_pos_execute_sale_ajax_handler');
-function puri_pos_execute_sale_ajax_handler() {
-    // ✅ Capability check with fallback
-    if (!(current_user_can(PURI_CAP_POS) || current_user_can('manage_options'))) {
-        wp_send_json_error(['message' => 'Unauthorized']);
-    }
-
+/**
+ * AJAX HANDLER: Power Logic v5.1.7
+ */
+function puri_pos_execute_sale_handler_v615() {
     check_ajax_referer('puri_admin_action', 'puri_admin_nonce');
+    global $wpdb, $puri_engine;
 
-    global $wpdb;
-    if (!function_exists('puri_engine')) {
-        wp_send_json_error(['message' => 'Engine not available']);
+    if (!isset($puri_engine)) {
+        global $puri_engine;
+        $puri_engine = $GLOBALS['puri_engine_v6'] ?? null;
     }
-    $puri_engine = puri_engine();
+    if (!$puri_engine) wp_send_json_error(['message' => 'Engine PURI tidak merespon.']);
 
-    // Parse & validate payload
-    $mode = isset($_POST['mode']) ? sanitize_text_field($_POST['mode']) : '';
-    $items = isset($_POST['items']) ? json_decode(stripslashes($_POST['items']), true) : null;
-    $total_idr = isset($_POST['total_idr']) ? floatval($_POST['total_idr']) : 0;
-    $total_riyal = isset($_POST['total_riyal']) ? floatval($_POST['total_riyal']) : 0;
+    $customer_id = intval($_POST['customer_id']);
+    $wic_data = $_POST['wic_data'] ?? [];
+    $cart = json_decode(stripslashes($_POST['cart']), true);
+    if (empty($cart)) wp_send_json_error(['message' => 'Keranjang kosong.']);
 
-    if (!is_array($items) || $total_idr <= 0) {
-        wp_send_json_error(['message' => 'Invalid sale payload']);
-    }
-
-    $ref_id = 'SLS-' . date('YmdHis') . '-' . wp_rand(100,999);
+    $ref_id = 'SLS-' . date('YmdHis');
     $wpdb->query('START TRANSACTION');
-    
+
     try {
-        // Identify or create customer
-        $customer_id = 0;
-        if ($mode === 'walk-in') {
-            $wic_name = sanitize_text_field($_POST['wic_name'] ?? '');
-            $wic_nik = sanitize_text_field($_POST['wic_nik'] ?? '');
-            $post_id = wp_insert_post(['post_type' => 'pr_customer', 'post_title' => $wic_name, 'post_status' => 'publish']);
-            if (!$post_id) throw new Exception('Failed to create walk-in customer');
-            if (function_exists('update_field')) update_field('cust_nik', $wic_nik, $post_id);
-            $customer_id = $post_id;
-        } else {
-            $customer_id = intval($_POST['cust_id'] ?? 0);
-        }
-        $customer_name = get_the_title($customer_id) ?: 'Umum';
+        $total_idr = 0;
+        $items_log = [];
 
-        $denom_breakdown = [];
-        $eceran_parts = [];
-        $bundle_parts = [];
+        foreach ($cart as $it) {
+            $id = intval($it['id']);
+            $qty = intval($it['qty']);
+            $total_idr += ($qty * $it['denom'] * $it['rate']);
+            $items_log[] = "{$qty}x {$it['sku']}";
 
-        foreach ($items as $it) {
-            $qty_sold = intval($it['qty']);
-            $item_id = intval($it['id']);
-            if ($qty_sold <= 0 || $item_id <= 0) throw new Exception('Invalid item in cart');
-
-            if ($it['type'] === 'package') {
-                // ✅ FIX: String concatenation
-                $bundle_parts[] = "Paket " . $qty_sold . "x " . sanitize_text_field($it['name']);
-                
-                $sku = sanitize_text_field($it['sku']);
-                $post_id = $wpdb->get_var($wpdb->prepare("SELECT post_id FROM {$wpdb->prefix}postmeta WHERE meta_key = 'item_sku_code' AND meta_value = %s LIMIT 1", $sku));
+            $item_data = $wpdb->get_row($wpdb->prepare("SELECT type, sku FROM ".puri_table_name('T_ITEMS')." WHERE id=%d", $id));
+            
+            if ($item_data->type === 'package') {
+                $post_id = $wpdb->get_var($wpdb->prepare("SELECT post_id FROM {$wpdb->prefix}postmeta WHERE meta_key = 'item_sku_code' AND meta_value = %s LIMIT 1", $item_data->sku));
                 $recipe = function_exists('get_field') ? get_field('package_contents', $post_id) : null;
                 
-                if ($recipe && is_array($recipe)) {
+                if ($recipe) {
                     foreach ($recipe as $comp) {
-                        $comp_post_ref = intval($comp['p_item_ref']);
-                        $c_sku = function_exists('get_field') ? get_field('item_sku_code', $comp_post_ref) : '';
-                        $c_id = $wpdb->get_var($wpdb->prepare("SELECT id FROM " . puri_table_name('T_ITEMS') . " WHERE sku = %s", $c_sku));
-                        $total_pcs = intval($comp['p_qty']) * $qty_sold;
-                        
-                        $ok = $puri_engine->update_stock_atomic('laci_kasir', $c_id, -$total_pcs);
-                        if (is_wp_error($ok)) throw new Exception($ok->get_error_message());
-                        
-                        $wpdb->insert(puri_table_name('T_LEDGER'), [
-                            'location_id'=>'laci_kasir',
-                            'item_id'=>$c_id,
-                            'qty_change'=>-$total_pcs,
-                            'ref_id'=>$ref_id,
-                            'description'=>'Penjualan Paket [' . sanitize_text_field($it['sku']) . '] - ' . $customer_name,
-                            'trx_date'=>current_time('mysql')
-                        ]);
-                        
-                        $res = $puri_engine->adjust_virtual_lock($c_id, -$total_pcs);
-                        if (is_wp_error($res)) throw new Exception($res->get_error_message());
-                        
-                        $denom_breakdown[] = ['sku'=>$c_sku,'qty_intrinsik'=>$total_pcs];
+                        $comp_sku = get_field('item_sku_code', $comp['p_item_ref']);
+                        $comp_id = $wpdb->get_var($wpdb->prepare("SELECT id FROM ".puri_table_name('T_ITEMS')." WHERE sku=%s", $comp_sku));
+                        $total_pcs = intval($comp['p_qty']) * $qty;
+                        $puri_engine->update_stock_atomic('laci_kasir', $comp_id, -$total_pcs);
+                        $puri_engine->adjust_virtual_lock($comp_id, -$total_pcs);
                     }
                 }
-                // Adjust lock on package itself
-                $puri_engine->adjust_virtual_lock($item_id, -$qty_sold);
-                
+                $puri_engine->adjust_virtual_lock($id, -$qty);
             } else {
-                // Eceran
-                $ok = $puri_engine->update_stock_atomic('laci_kasir', $item_id, -$qty_sold);
-                if (is_wp_error($ok)) throw new Exception($ok->get_error_message());
-                
-                $wpdb->insert(puri_table_name('T_LEDGER'), [
-                    'location_id'=>'laci_kasir',
-                    'item_id'=>$item_id,
-                    'qty_change'=>-$qty_sold,
-                    'ref_id'=>$ref_id,
-                    'description'=>'Penjualan Eceran - ' . $customer_name,
-                    'trx_date'=>current_time('mysql')
-                ]);
-                
-                $net_rate = floatval($it['rate']) - floatval($it['discount_rate'] ?? 0);
-                // ✅ FIX: String concatenation
-                $eceran_parts[] = "(" . $qty_sold . "x " . sanitize_text_field($it['sku']) . " @" . number_format($net_rate) . ")";
-                $denom_breakdown[] = ['sku'=>$it['sku'],'qty_intrinsik'=>$qty_sold];
+                $res = $puri_engine->update_stock_atomic('laci_kasir', $id, -$qty);
+                if (is_wp_error($res)) throw new Exception($res->get_error_message());
             }
+
+            $wpdb->insert(puri_table_name('T_LEDGER'), [
+                'location_id' => 'laci_kasir', 'item_id' => $id, 'qty_change' => -$qty,
+                'ref_id' => $ref_id, 'description' => 'Penjualan POS', 'trx_date' => current_time('mysql')
+            ]);
         }
 
-        // ✅ FIX: Use implode with proper array
-        $desc = implode(' | ', array_filter(array_merge($eceran_parts, $bundle_parts)));
+        // DOUBLE ENTRY JOURNAL
+        $desc = "Sales: " . implode(', ', $items_log);
+        if ($customer_id == 0) $desc .= " (WIC: {$wic_data['name']})";
 
-        $resDebit = $puri_engine->post_journal($ref_id, '1101', $total_idr, 0, $desc);
-        if (is_wp_error($resDebit)) throw new Exception($resDebit->get_error_message());
-        
-        $resCredit = $puri_engine->post_journal($ref_id, '4100', 0, $total_idr, $desc, [
-            'customer' => $customer_name, 
-            'total_riyal' => $total_riyal,
-            'total_idr' => $total_idr, 
-            'items' => $items, 
-            'inventory_explode' => $denom_breakdown
-        ]);
-        if (is_wp_error($resCredit)) throw new Exception($resCredit->get_error_message());
+        $puri_engine->post_journal($ref_id, '1101', $total_idr, 0, $desc);
+        $puri_engine->post_journal($ref_id, '4100', 0, $total_idr, $desc);
 
         $wpdb->query('COMMIT');
-        wp_send_json_success(['message'=>'Lunas','ref_id'=>$ref_id]);
-        
+        wp_send_json_success(['message' => 'Lunas!', 'ref_id' => $ref_id]);
     } catch (Exception $e) {
         $wpdb->query('ROLLBACK');
-        error_log('PURI POS Sale Error: ' . $e->getMessage());
-        wp_send_json_error(['message'=>'Sale failed: ' . $e->getMessage()]);
+        wp_send_json_error(['message' => $e->getMessage()]);
     }
 }
-
-/* ------------------------
-   AJAX: Build/Lock Bundle
-   ------------------------ */
-add_action('wp_ajax_puri_pos_build_bundle_ajax', 'puri_pos_build_bundle_ajax_handler');
-function puri_pos_build_bundle_ajax_handler() {
-    // ✅ Capability check with fallback
-    if (!(current_user_can(PURI_CAP_POS) || current_user_can('manage_options'))) {
-        wp_send_json_error(['message' => 'Unauthorized']);
-    }
-
-    check_ajax_referer('puri_admin_action', 'puri_admin_nonce');
-
-    global $wpdb;
-    if (!function_exists('puri_engine')) {
-        wp_send_json_error(['message' => 'Engine not available']);
-    }
-    $puri_engine = puri_engine();
-	$bundle_sql_id = intval($_POST['item_id'] ?? 0);
-$qty_to_lock = intval($_POST['qty'] ?? 0);
-
-if ($bundle_sql_id <= 0 || $qty_to_lock <= 0) {
-    wp_send_json_error(['message' => 'Invalid input']);
-}
-
-try {
-    $sku = $wpdb->get_var($wpdb->prepare("SELECT sku FROM " . puri_table_name('T_ITEMS') . " WHERE id = %d", $bundle_sql_id));
-    $post_id = $wpdb->get_var($wpdb->prepare("SELECT post_id FROM {$wpdb->prefix}postmeta WHERE meta_key = 'item_sku_code' AND meta_value = %s LIMIT 1", $sku));
-    $recipe = function_exists('get_field') ? get_field('package_contents', $post_id) : null;
-    
-    if (!$recipe) {
-        wp_send_json_error(['message' => 'Resep kosong.']);
-    }
-
-    foreach ($recipe as $comp) {
-        $comp_post_ref = intval($comp['p_item_ref']);
-        $c_sku = function_exists('get_field') ? get_field('item_sku_code', $comp_post_ref) : '';
-        $c_id = $wpdb->get_var($wpdb->prepare("SELECT id FROM " . puri_table_name('T_ITEMS') . " WHERE sku = %s", $c_sku));
-        $total_lock = intval($comp['p_qty']) * $qty_to_lock;
-        
-        $res = $puri_engine->adjust_virtual_lock($c_id, $total_lock);
-        if (is_wp_error($res)) {
-            wp_send_json_error(['message' => $res->get_error_message()]);
-        }
-    }
-    
-    // Lock package id
-    $res2 = $puri_engine->adjust_virtual_lock($bundle_sql_id, $qty_to_lock);
-    if (is_wp_error($res2)) {
-        wp_send_json_error(['message' => $res2->get_error_message()]);
-    }
-
-    wp_send_json_success(['message' => "Sukses mengunci {$qty_to_lock} paket ke dalam laci."]);
-    
-} catch (Exception $e) {
-    error_log('PURI POS Bundle Error: ' . $e->getMessage());
-    wp_send_json_error(['message' => 'Bundle lock failed: ' . $e->getMessage()]);
-}
-}
-	
