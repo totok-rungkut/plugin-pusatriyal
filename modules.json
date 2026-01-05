@@ -23,6 +23,7 @@
     "mc-20-inventory-ledger.php",
     "mc-21-daily-riyal.php",
     "mc-22-pivot.php",
-    "mc-23-coa-manager.php"
+    "mc-23-coa-manager.php",
+    "mc-24-user-role-manager.php"
   ]
 }
