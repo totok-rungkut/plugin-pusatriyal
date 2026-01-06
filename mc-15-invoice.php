@@ -1,78 +1,105 @@
 <?php
 /**
- * MC 15 - Invoice & Receipt Generator
+ * MC 15 - Centralized Invoice & Receipt (Refactor)
  * Version: 6.0.1
- * Changes:
- * - Menempel pada Pilar 2 (puri-transaksi) sebagai menu tersembunyi.
- * - Menggunakan puri_check_cap() dan puri_table_name() v6.0.1.
+ * Author: Denmas Totok (refactor by Copilot)
+ *
+ * Purpose:
+ *  - Printable invoice page (admin hidden submenu)
+ *
+ * Improvements:
+ *  - Capability check
+ *  - Safe lookup of journal entry (by ref_id) with defensive checks
+ *  - Escaped outputs for legal/profile data and snapshot
  */
 
 defined('ABSPATH') || exit;
 
 add_action('admin_menu', function() {
-    // Daftarkan invoice di bawah Transaksi, tapi sembunyikan dari sidebar jika ingin bersih
-    // Atau tampilkan agar admin bisa cetak ulang manual
-    add_submenu_page(
-        'puri-transaksi', 
-        'Invoice', 
-        '📄 Invoice Viewer', 
-        'manage_options', 
-        'puri-invoice', 
-        'puri_render_invoice_page'
-    );
-}, 25);
+    // Keep submenu hidden as in prior design
+    add_submenu_page(null, 'Cetak Invoice', 'Cetak Invoice', 'manage_options', 'puri-print-invoice', 'puri_render_invoice_page');
+});
 
 function puri_render_invoice_page() {
-    puri_check_cap('manage_options'); //
+    puri_check_cap('manage_options');
     global $wpdb;
 
     $ref_id = isset($_GET['ref_id']) ? sanitize_text_field($_GET['ref_id']) : '';
-    if (!$ref_id) {
-        echo '<div class="notice notice-error"><p>Reference ID tidak ditemukan.</p></div>';
-        return;
-    }
+    if (!$ref_id) wp_die('ID Transaksi tidak ditemukan.');
 
-    // Ambil data dari Jurnal (Snapshot JSON v5.1.7 style)
-    $invoice = $wpdb->get_row($wpdb->prepare(
-        "SELECT * FROM " . puri_table_name('T_JOURNAL') . " WHERE ref_id = %s LIMIT 1", 
-        $ref_id
-    ));
+    $journal_entry = $wpdb->get_row($wpdb->prepare("
+        SELECT * FROM " . puri_table_name('T_JOURNAL') . " WHERE ref_id = %s AND snapshot_json IS NOT NULL LIMIT 1
+    ", $ref_id));
 
-    if (!$invoice) {
-        echo '<div class="notice notice-error"><p>Data Invoice tidak ditemukan di database.</p></div>';
-        return;
-    }
+    if (!$journal_entry) wp_die('Data transaksi tidak ditemukan atau tidak memiliki rincian.');
 
+    $snapshot = json_decode($journal_entry->snapshot_json, true);
+    $co = [
+        'logo' => function_exists('get_field') ? get_field('cp_logo','option') : '',
+        'name' => function_exists('get_field') ? (get_field('cp_name','option') ?: 'Pusat Riyal') : 'Pusat Riyal',
+        'bi' => function_exists('get_field') ? (get_field('cp_bi_license','option') ?: '-') : '-',
+        'npwp' => function_exists('get_field') ? (get_field('cp_npwp','option') ?: '-') : '-',
+        'address' => function_exists('get_field') ? (get_field('cp_address','option') ?: '-') : '-',
+        'city' => function_exists('get_field') ? (get_field('cp_city','option') ?: '-') : '-',
+        'phone' => function_exists('get_field') ? (get_field('cp_phone','option') ?: '-') : '-',
+    ];
     ?>
-    <div class="wrap">
-        <div style="background:#fff; padding:30px; border:1px solid #d1d5db; max-width:500px; margin: 20px auto; border-radius:8px; font-family:monospace;">
-            <center>
-                <h2 style="margin:0;">PUSAT RIYAL</h2>
-                <p style="font-size:12px;">Bukti Transaksi Penjualan</p>
-                <hr style="border:none; border-top:1px dashed #000;">
-            </center>
-            
-            <table style="width:100%; font-size:13px;">
-                <tr><td>Ref ID</td><td>: <?php echo esc_html($invoice->ref_id); ?></td></tr>
-                <tr><td>Tanggal</td><td>: <?php echo esc_html($invoice->trx_date); ?></td></tr>
-                <tr><td>Ket</td><td>: <?php echo esc_html($invoice->description); ?></td></tr>
-            </table>
+    <style>
+      @media print { .no-print { display:none!important } #adminmenuback,#adminmenuwrap,#wpadminbar,#wpfooter { display:none!important } body{margin:0;padding:0} }
+      body{font-family:Courier,monospace;background:#fff;color:#000;padding:20px}
+      .invoice-box{max-width:400px;margin:auto;border:1px solid #eee;padding:16px}
+    </style>
 
-            <hr style="border:none; border-top:1px dashed #000;">
-            
-            <div style="text-align:right; font-weight:900; font-size:18px;">
-                TOTAL: Rp <?php echo number_format($invoice->debit + $invoice->credit); ?>
-            </div>
+    <div class="no-print" style="text-align:center;margin-bottom:12px">
+      <button onclick="window.print()" class="button button-primary">🖨️ CETAK INVOICE</button>
+      <button onclick="window.close()" class="button">TUTUP</button>
+    </div>
 
-            <div style="margin-top:30px; text-align:center;">
-                <button class="button button-primary no-print" onclick="window.print()">CETAK STRUK</button>
-                <a href="admin.php?page=puri-pos" class="button no-print">KEMBALI KE KASIR</a>
-            </div>
+    <div class="invoice-box">
+      <div style="text-align:center;border-bottom:2px dashed #000;padding-bottom:8px;margin-bottom:8px">
+        <?php if ($co['logo']): ?><img src="<?php echo esc_url($co['logo']); ?>" style="max-height:60px;margin-bottom:8px"><br><?php endif; ?>
+        <strong style="display:block;font-size:16px"><?php echo esc_html($co['name']); ?></strong>
+        <small>Izin BI: <?php echo esc_html($co['bi']); ?> | NPWP: <?php echo esc_html($co['npwp']); ?></small><br>
+        <small><?php echo esc_html($co['address'] . ', ' . $co['city']); ?> | Telp: <?php echo esc_html($co['phone']); ?></small>
+      </div>
+
+      <table style="width:100%;font-size:13px">
+        <tr><td>No. Ref</td><td>: <?php echo esc_html($ref_id); ?></td></tr>
+        <tr><td>Tanggal</td><td>: <?php echo esc_html(date('d/m/Y H:i', strtotime($journal_entry->trx_date))); ?></td></tr>
+        <tr><td>Customer</td><td>: <?php echo esc_html($snapshot['customer'] ?? 'Umum'); ?></td></tr>
+        <tr><td>Kasir</td><td>: <?php echo esc_html(get_the_author_meta('display_name', $journal_entry->created_by)); ?></td></tr>
+      </table>
+
+      <hr>
+
+      <table style="width:100%;font-size:13px;border-collapse:collapse">
+        <thead><tr><th style="text-align:left">Deskripsi</th><th style="text-align:right">Qty</th><th style="text-align:right">Total IDR</th></tr></thead>
+        <tbody>
+          <?php if (!empty($snapshot['items']) && is_array($snapshot['items'])): foreach ($snapshot['items'] as $it): ?>
+            <tr>
+              <td><?php echo esc_html($it['sku'] . ' ' . ($it['type']=='package' ? '(Paket)' : 'SAR '.$it['denom_value'])); ?></td>
+              <td style="text-align:right"><?php echo number_format(intval($it['qty'])); ?></td>
+              <td style="text-align:right"><?php echo number_format(intval($it['qty'] * ($it['denom_value'] ?? $it['denom'] ?? 1) * (($it['sell_rate'] ?? 0) - ($it['discount_rate'] ?? 0)))); ?></td>
+            </tr>
+          <?php endforeach; endif; ?>
+        </tbody>
+      </table>
+
+      <?php if (!empty($snapshot['inventory_explode'])): ?>
+        <div style="background:#f9f9f9;padding:8px;margin-top:8px;border-radius:6px">
+          <strong>Rincian Fisik (Isi Paket)</strong>
+          <?php foreach ($snapshot['inventory_explode'] as $ex): ?>
+            <div style="display:flex;justify-content:space-between"><span>• <?php echo esc_html($ex['sku']); ?></span><span><?php echo number_format(intval($ex['qty_intrinsik'])); ?> Lembar</span></div>
+          <?php endforeach; ?>
         </div>
+      <?php endif; ?>
 
-        <style>
-            @media print { .no-print { display:none; } }
-        </style>
+      <div style="border-top:2px dashed #000;margin-top:10px;padding-top:8px;text-align:right">
+        <div>Total SAR: <?php echo number_format(intval($snapshot['total_riyal'] ?? 0)); ?></div>
+        <div style="font-weight:900;font-size:18px">TOTAL BAYAR (IDR): Rp <?php echo number_format(intval($snapshot['total_idr'] ?? 0)); ?></div>
+      </div>
+
+      <div style="text-align:center;margin-top:12px;font-size:11px">Terima kasih telah bertransaksi di <?php echo esc_html($co['name']); ?>.</div>
     </div>
     <?php
 }
