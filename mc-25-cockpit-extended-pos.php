@@ -291,174 +291,383 @@ class Puri_Cockpit_POS {
             }
         </style>
 
-        <script>
-        jQuery(document).ready(function($) {
-            
-            const Cockpit = { cart: [] };
+<script>
+jQuery(document).ready(function($) {
+    
+    const Cockpit = { cart: [] };
 
-            function init() {
-                loadStockAndHistory();
-                setupListeners();
-                $('#item_select').select2({ placeholder: "Pilih Item...", width: '100%' });
-                $('#customer_select').select2({ placeholder: "Pilih Customer...", width: '100%', allowClear: true });
+    // Format angka desimal agar presisi
+    function parseNum(val) {
+        return parseFloat(val) || 0;
+    }
+
+    function init() {
+        loadStockAndHistory();
+        setupListeners();
+        
+        // Inisialisasi Select2
+        $('#item_select').select2({ placeholder: "Pilih Item...", width: '100%' });
+        $('#customer_select').select2({ placeholder: "Pilih Customer...", width: '100%', allowClear: true });
+    }
+
+    function setupListeners() {
+        // --- 1. HANDLING TIPE CUSTOMER ---
+        $('input[name="cust_type"]').change(function() {
+            let type = $(this).val();
+            if(type === 'registered') { 
+                $('#box_registered').slideDown(); 
+                $('#box_walkin').slideUp(); 
+            } else { 
+                $('#box_registered').slideUp(); 
+                $('#box_walkin').slideDown(); 
+                $('#customer_select').val(null).trigger('change'); 
             }
-
-            function setupListeners() {
-                $('input[name="cust_type"]').change(function() {
-                    let type = $(this).val();
-                    if(type === 'registered') { $('#box_registered').slideDown(); $('#box_walkin').slideUp(); } 
-                    else { $('#box_registered').slideUp(); $('#box_walkin').slideDown(); $('#customer_select').val(null).trigger('change'); }
-                });
-
-                $('#customer_select').on('select2:select', function (e) {
-                    let opt = $(this).find(':selected');
-                    let type = (opt.data('type') || 'Member').toLowerCase();
-                    $('#cust_badge').text(type.toUpperCase()).removeClass('hidden');
-                    checkRateEditable(type);
-                });
-                
-                $('#customer_select').on('select2:clear', function (e) {
-                    $('#cust_badge').addClass('hidden').text('');
-                    checkRateEditable('');
-                });
-
-                $('#item_select').on('select2:select', function(e) {
-                    let opt = $(this).find(':selected');
-                    let denom = parseFloat(opt.data('denom')) || 0;
-                    let rate = parseFloat(opt.data('rate')) || 0;
-                    let stock = parseFloat(opt.data('stock')) || 0;
-                    let img = opt.data('img') || '<?php echo plugin_dir_url(__FILE__) . 'assets/img/no-image.png'; ?>';
-
-                    $('#inp_denom').val(denom);
-                    $('#base_rate_hidden').val(rate);
-                    $('#current_stock').val(stock);
-                    $('#item_img_preview').attr('src', img);
-                    
-                    $('#inp_rate').val(rate);
-                    $('#info_base_rate').text(rate.toLocaleString());
-                    $('#inp_qty').val('').focus();
-                    $('#inp_total_riyal').val('');
-                    $('#inp_total_idr').val('Rp 0');
-                    
-                    checkStockLock();
-                });
-
-                $('#inp_qty').on('input', function() {
-                    let qty = parseFloat($(this).val()) || 0;
-                    let denom = parseFloat($('#inp_denom').val()) || 0;
-                    let riyal = qty * denom;
-                    $('#inp_total_riyal').val(riyal > 0 ? riyal : '');
-                    calcFinalIDR(); checkStockLock();
-                });
-
-                $('#inp_total_riyal').on('input', function() {
-                    let riyal = parseFloat($(this).val()) || 0;
-                    let denom = parseFloat($('#inp_denom').val()) || 0;
-                    if(denom > 0) {
-                        let qty = riyal / denom;
-                        $('#inp_qty').val(qty > 0 ? qty : '');
-                    }
-                    calcFinalIDR(); checkStockLock();
-                });
-
-                $('#inp_rate').on('input', function() { calcFinalIDR(); });
-                $('#btn_clear_form').click(function() { $('#item_select').val(null).trigger('change'); $('#inp_qty').val(''); $('#inp_total_riyal').val(''); $('#inp_total_idr').val('Rp 0'); });
-                $('#btn_add_cart').click(addToCart);
-                $('#inp_qty').keypress(function(e){ if(e.which == 13 && !$('#btn_add_cart').prop('disabled')) $('#btn_add_cart').click(); });
-                $(document).on('click', '.btn-remove-item', function() { Cockpit.cart.splice($(this).data('index'), 1); renderCart(); });
-                $('#btn_checkout').click(handleCheckout);
-                $('#btn_refresh_history').click(loadStockAndHistory);
-            }
-
-            function checkRateEditable(custType) {
-                let isFinance = $('#is_finance').val() === '1';
-                let isAgen = (custType === 'agen' || custType === 'agent');
-                if(isFinance || isAgen) { $('#inp_rate').prop('readonly', false).removeClass('bg-gray').addClass('highlight-input'); } 
-                else { $('#inp_rate').prop('readonly', true).addClass('bg-gray').removeClass('highlight-input'); $('#inp_rate').val($('#base_rate_hidden').val()); calcFinalIDR(); }
-            }
-
-            function calcFinalIDR() {
-                let riyal = parseFloat($('#inp_total_riyal').val()) || 0;
-                let rate = parseFloat($('#inp_rate').val()) || 0;
-                let idr = riyal * rate;
-                $('#inp_total_idr').val('Rp ' + idr.toLocaleString('id-ID'));
-            }
-
-            function checkStockLock() {
-                let qty = parseFloat($('#inp_qty').val()) || 0;
-                let stock = parseFloat($('#current_stock').val()) || 0;
-                let btn = $('#btn_add_cart');
-                let warn = $('#stock_warning');
-                if(qty > 0 && qty <= stock) { btn.prop('disabled', false); warn.addClass('hidden'); } 
-                else if (qty > stock) { btn.prop('disabled', true); warn.removeClass('hidden'); } 
-                else { btn.prop('disabled', true); warn.addClass('hidden'); }
-            }
-
-            function addToCart() {
-                let itemId = $('#item_select').val();
-                let itemName = $('#item_select option:selected').text();
-                let denom = parseFloat($('#inp_denom').val());
-                let rate = parseFloat($('#inp_rate').val());
-                let qty = parseFloat($('#inp_qty').val());
-                let riyal = parseFloat($('#inp_total_riyal').val());
-                let idr = riyal * rate; 
-                if(!itemId || qty <= 0) return;
-                Cockpit.cart.push({ id: itemId, name: itemName.split('(')[0], denom: denom, rate: rate, qty: qty, riyal: riyal, idr: idr });
-                $('#btn_clear_form').click(); renderCart();
-            }
-
-            function renderCart() {
-                let tbody = $('#cart_table tbody'); tbody.empty();
-                let sumRiyal = 0; let sumIDR = 0;
-                if(Cockpit.cart.length === 0) { tbody.html('<tr class="empty-cart"><td colspan="5" align="center" style="padding:20px; color:#aaa;">Keranjang kosong</td></tr>'); } 
-                else {
-                    Cockpit.cart.forEach((item, index) => {
-                        sumRiyal += item.riyal; sumIDR += item.idr;
-                        tbody.append(`<tr><td>${item.name}</td><td class="tc">${item.qty}</td><td class="tr">${item.riyal.toLocaleString()}</td><td class="tr">${item.idr.toLocaleString()}</td><td class="tc"><button class="button button-small btn-remove-item" data-index="${index}"><i class="fa fa-times" style="color:red"></i></button></td></tr>`);
-                    });
-                }
-                $('#cart_total_riyal').text(sumRiyal.toLocaleString('en-US'));
-                $('#cart_total_idr').text('Rp ' + sumIDR.toLocaleString('id-ID'));
-            }
-
-            function handleCheckout() {
-                if(Cockpit.cart.length === 0) return Swal.fire('Kosong', 'Keranjang belanja kosong', 'warning');
-                if(!$('#chk_valid').is(':checked')) return Swal.fire('Konfirmasi', 'Mohon centang "Data & Uang sudah benar"', 'info');
-                let mode = $('input[name="cust_type"]:checked').val();
-                let custData = {};
-                if(mode === 'registered') {
-                    custData.id = $('#customer_select').val();
-                    if(!custData.id) return Swal.fire('Error', 'Pilih Customer Member dulu', 'error');
-                    custData.name = $('#customer_select option:selected').text();
-                } else {
-                    custData.name = $('#wic_name').val(); custData.nik = $('#wic_nik').val(); custData.phone = $('#wic_phone').val(); custData.address = $('#wic_address').val();
-                    if(!custData.name || !custData.nik || !custData.phone || !custData.address || !$('#wic_ktp')[0].files[0]) return Swal.fire('Data Belum Lengkap', 'Lengkapi data Walk-in & Upload KTP', 'error');
-                }
-                let totalStr = $('#cart_total_idr').text();
-                Swal.fire({ title: 'Terima Pembayaran?', text: `Total: ${totalStr}. Uang sudah diterima?`, icon: 'question', showCancelButton: true, confirmButtonText: 'Ya, Proses!', confirmButtonColor: '#2271b1' }).then((res) => { if (res.isConfirmed) processTransaction(mode, custData); });
-            }
-
-            function processTransaction(mode, custData) {
-                Swal.fire({title: 'Memproses...', text: 'Mengupload data...', didOpen: () => Swal.showLoading()});
-                let formData = new FormData();
-                formData.append('action', 'puri_pos_checkout');
-                formData.append('nonce', '<?php echo wp_create_nonce("puri_pos_checkout"); ?>');
-                formData.append('cart', JSON.stringify(Cockpit.cart));
-                formData.append('cust_mode', mode);
-                if(mode === 'walkin') {
-                    formData.append('wic_name', custData.name); formData.append('wic_nik', custData.nik); formData.append('wic_phone', custData.phone); formData.append('wic_address', custData.address); formData.append('wic_ktp', $('#wic_ktp')[0].files[0]);
-                } else { formData.append('cust_id', custData.id); }
-                $.ajax({ url: ajaxurl, type: 'POST', data: formData, processData: false, contentType: false, success: function(response) { if(response.success) { Swal.fire('Sukses!', 'Ref: ' + response.data.ref_id, 'success'); Cockpit.cart = []; $('#wic_name').val(''); $('#wic_nik').val(''); $('#wic_phone').val(''); $('#wic_address').val(''); $('#wic_ktp').val(''); $('#btn_clear_form').click(); renderCart(); loadStockAndHistory(); } else { Swal.fire('Gagal', response.data, 'error'); } }, error: function() { Swal.fire('Error', 'Server Error', 'error'); } });
-            }
-
-            function loadStockAndHistory() {
-                $.get(ajaxurl, { action: 'puri_pos_get_stock_summary' }, function(res){ if(res.success) { let html = ''; res.data.forEach(s => { html += `<tr><td>${s.name}</td><td class="tr"><strong>${s.qty}</strong></td><td class="tr">${s.sales_today}</td></tr>`; }); $('#stock_table tbody').html(html); } });
-                $.get(ajaxurl, { action: 'puri_pos_get_daily_mutation' }, function(res){ if(res.success) { let html = ''; res.data.forEach(m => { html += `<tr><td>${m.time}</td><td>${m.ref_id}</td><td class="tr">${m.total_riyal}</td><td class="tr">${m.total_idr}</td><td><i class="fa fa-check" style="color:green"></i></td></tr>`; }); $('#history_table tbody').html(html); } });
-            }
-            init();
         });
-        </script>
-        <?php
+
+        // --- 2. HANDLING PILIH CUSTOMER ---
+        $('#customer_select').on('select2:select', function (e) {
+            let opt = $(this).find(':selected');
+            let type = (opt.data('type') || 'Member').toLowerCase();
+            $('#cust_badge').text(type.toUpperCase()).removeClass('hidden');
+            checkRateEditable(type);
+        });
+        
+        $('#customer_select').on('select2:clear', function (e) {
+            $('#cust_badge').addClass('hidden').text('');
+            checkRateEditable('');
+        });
+
+        // --- 3. HANDLING PILIH ITEM (Populate Data) ---
+        $('#item_select').on('select2:select', function(e) {
+            let opt = $(this).find(':selected');
+            
+            // Ambil data dari atribut option
+            let denom = parseNum(opt.data('denom'));
+            let rate = parseNum(opt.data('rate'));
+            let stock = parseNum(opt.data('stock'));
+            let img = opt.data('img') || '<?php echo plugin_dir_url(__FILE__) . 'assets/img/no-image.png'; ?>';
+
+            // Validasi Denom (Penting!)
+            if (denom <= 0) {
+                Swal.fire('Error Data', 'Item ini memiliki Denominasi 0. Harap perbaiki Master Item terlebih dahulu.', 'error');
+            }
+
+            // Isi Hidden Fields & UI
+            $('#inp_denom').val(denom);
+            $('#base_rate_hidden').val(rate);
+            $('#current_stock').val(stock);
+            $('#item_img_preview').attr('src', img);
+            
+            // Set Default Rate
+            $('#inp_rate').val(rate);
+            $('#info_base_rate').text(rate.toLocaleString());
+
+            // Reset Inputan
+            $('#inp_qty').val('').focus();
+            $('#inp_total_riyal').val('');
+            $('#inp_total_idr').val('Rp 0');
+            
+            checkStockLock(); // Re-validasi tombol
+        });
+
+        // --- 4. KALKULASI: INPUT QTY ---
+        $('#inp_qty').on('input', function() {
+            let qty = parseNum($(this).val());
+            let denom = parseNum($('#inp_denom').val());
+            
+            // Rumus: Total Riyal = Qty * Denom
+            let riyal = qty * denom;
+            
+            // Update field Riyal (jika denom valid)
+            if (denom > 0) {
+                $('#inp_total_riyal').val(riyal > 0 ? riyal : '');
+            }
+            
+            calcFinalIDR(); // Hitung IDR
+            checkStockLock(); // Cek Tombol
+        });
+
+        // --- 5. KALKULASI: INPUT TOTAL RIYAL ---
+        $('#inp_total_riyal').on('input', function() {
+            let riyal = parseNum($(this).val());
+            let denom = parseNum($('#inp_denom').val());
+
+            // Rumus: Qty = Total Riyal / Denom
+            if(denom > 0) {
+                let qty = riyal / denom;
+                // Update field Qty (biarkan desimal jika hasil bagi tidak bulat)
+                $('#inp_qty').val(qty > 0 ? qty : '');
+            } else {
+                // Jika denom 0, user tidak bisa isi via Riyal karena pembagian 0 = infinity
+                // Opsional: Alert user
+            }
+            
+            calcFinalIDR(); // Hitung IDR
+            checkStockLock(); // Cek Tombol
+        });
+
+        // --- 6. UBAH KURS (Manual Override) ---
+        $('#inp_rate').on('input', function() { 
+            calcFinalIDR(); 
+        });
+
+        // --- 7. BUTTON ACTIONS ---
+        $('#btn_clear_form').click(function() { 
+            $('#item_select').val(null).trigger('change'); 
+            $('#inp_qty').val(''); 
+            $('#inp_total_riyal').val(''); 
+            $('#inp_total_idr').val('Rp 0'); 
+            $('#btn_add_cart').prop('disabled', true);
+        });
+
+        $('#btn_add_cart').click(addToCart);
+        
+        // Enter key shortcut
+        $('#inp_qty').keypress(function(e){ 
+            if(e.which == 13 && !$('#btn_add_cart').prop('disabled')) $('#btn_add_cart').click(); 
+        });
+
+        $(document).on('click', '.btn-remove-item', function() { 
+            Cockpit.cart.splice($(this).data('index'), 1); 
+            renderCart(); 
+        });
+
+        $('#btn_checkout').click(handleCheckout);
+        $('#btn_refresh_history').click(loadStockAndHistory);
+    }
+
+    // --- LOGIC: Cek Editable Rate ---
+    function checkRateEditable(custType) {
+        let isFinance = $('#is_finance').val() === '1';
+        let isAgen = (custType === 'agen' || custType === 'agent');
+        
+        if(isFinance || isAgen) { 
+            $('#inp_rate').prop('readonly', false).removeClass('bg-gray').addClass('highlight-input'); 
+        } else { 
+            $('#inp_rate').prop('readonly', true).addClass('bg-gray').removeClass('highlight-input'); 
+            $('#inp_rate').val($('#base_rate_hidden').val()); 
+            calcFinalIDR(); 
+        }
+    }
+
+    // --- LOGIC: Hitung Total IDR ---
+    function calcFinalIDR() {
+        let riyal = parseNum($('#inp_total_riyal').val());
+        let rate = parseNum($('#inp_rate').val());
+        let idr = riyal * rate;
+        
+        $('#inp_total_idr').val('Rp ' + idr.toLocaleString('id-ID'));
+    }
+
+    // --- LOGIC: Validasi Stok & Button State ---
+    function checkStockLock() {
+        let qty = parseNum($('#inp_qty').val());
+        let riyal = parseNum($('#inp_total_riyal').val());
+        let stock = parseNum($('#current_stock').val());
+        let denom = parseNum($('#inp_denom').val());
+        
+        let btn = $('#btn_add_cart');
+        let warn = $('#stock_warning');
+        
+        // Syarat Tombol Aktif:
+        // 1. Qty > 0
+        // 2. Qty <= Stock
+        // 3. Riyal > 0 (Perbaikan yang diminta)
+        // 4. Denom > 0 (Validasi Data Master)
+        
+        let isValid = (qty > 0) && (riyal > 0) && (denom > 0) && (qty <= stock);
+
+        if(isValid) {
+            btn.prop('disabled', false); 
+            warn.addClass('hidden'); 
+        } else {
+            btn.prop('disabled', true);
+            if (qty > stock) {
+                warn.removeClass('hidden').html('<i class="fa-solid fa-triangle-exclamation"></i> Melebihi Stok Laci!');
+            } else if (denom === 0 && qty > 0) {
+                 warn.removeClass('hidden').html('<i class="fa-solid fa-triangle-exclamation"></i> Error: Denom 0');
+            } else {
+                warn.addClass('hidden');
+            }
+        }
+    }
+
+    // --- LOGIC: Add To Cart ---
+    function addToCart() {
+        // Ambil value terakhir
+        let itemId = $('#item_select').val();
+        let itemName = $('#item_select option:selected').text();
+        let denom = parseNum($('#inp_denom').val());
+        let rate = parseNum($('#inp_rate').val());
+        let qty = parseNum($('#inp_qty').val());
+        let riyal = parseNum($('#inp_total_riyal').val());
+        
+        // Hitung ulang IDR untuk memastikan konsistensi
+        let idr = riyal * rate; 
+
+        // --- VALIDASI FINAL (Sesuai Request) ---
+        if(!itemId) { Swal.fire('Gagal', 'Pilih Item dulu', 'error'); return; }
+        if(qty <= 0) { Swal.fire('Gagal', 'Qty tidak boleh 0', 'warning'); return; }
+        if(riyal <= 0) { Swal.fire('Gagal', 'Total Riyal (SAR) tidak boleh 0', 'warning'); return; }
+        
+        // Masukkan ke Array Cart
+        Cockpit.cart.push({ 
+            id: itemId, 
+            name: itemName.split('(')[0], // Bersihkan nama dari info stok
+            denom: denom, 
+            rate: rate, 
+            qty: qty, 
+            riyal: riyal, 
+            idr: idr 
+        });
+
+        // Putar suara (jika ada elemen audio)
+        let sfx = document.getElementById('fx_cart_clicked');
+        if(sfx) sfx.play();
+
+        // Reset Form & Render
+        $('#btn_clear_form').click(); 
+        renderCart();
+    }
+
+    function renderCart() {
+        let tbody = $('#cart_table tbody'); tbody.empty();
+        let sumRiyal = 0; let sumIDR = 0;
+        
+        if(Cockpit.cart.length === 0) { 
+            tbody.html('<tr class="empty-cart"><td colspan="5" align="center" style="padding:20px; color:#aaa;">Keranjang kosong</td></tr>'); 
+        } else {
+            Cockpit.cart.forEach((item, index) => {
+                sumRiyal += item.riyal; 
+                sumIDR += item.idr;
+                tbody.append(`
+                    <tr>
+                        <td>${item.name}</td>
+                        <td class="tc">${item.qty}</td>
+                        <td class="tr">${item.riyal.toLocaleString()}</td>
+                        <td class="tr">${item.idr.toLocaleString('id-ID')}</td>
+                        <td class="tc">
+                            <button class="button button-small btn-remove-item" data-index="${index}">
+                                <i class="fa fa-times" style="color:red"></i>
+                            </button>
+                        </td>
+                    </tr>
+                `);
+            });
+        }
+        $('#cart_total_riyal').text(sumRiyal.toLocaleString('en-US'));
+        $('#cart_total_idr').text('Rp ' + sumIDR.toLocaleString('id-ID'));
+    }
+
+    function handleCheckout() {
+        if(Cockpit.cart.length === 0) return Swal.fire('Kosong', 'Keranjang belanja kosong', 'warning');
+        if(!$('#chk_valid').is(':checked')) return Swal.fire('Konfirmasi', 'Mohon centang "Data & Uang sudah benar"', 'info');
+        
+        let mode = $('input[name="cust_type"]:checked').val();
+        let custData = {};
+        
+        if(mode === 'registered') {
+            custData.id = $('#customer_select').val();
+            if(!custData.id) return Swal.fire('Error', 'Pilih Customer Member dulu', 'error');
+            custData.name = $('#customer_select option:selected').text();
+        } else {
+            custData.name = $('#wic_name').val(); 
+            custData.nik = $('#wic_nik').val(); 
+            custData.phone = $('#wic_phone').val(); 
+            custData.address = $('#wic_address').val();
+            
+            if(!custData.name || !custData.nik || !custData.phone || !custData.address || !$('#wic_ktp')[0].files[0]) 
+                return Swal.fire('Data Belum Lengkap', 'Lengkapi data Walk-in & Upload KTP', 'error');
+        }
+        
+        let totalStr = $('#cart_total_idr').text();
+        
+        Swal.fire({ 
+            title: 'Terima Pembayaran?', 
+            text: `Total: ${totalStr}. Uang sudah diterima?`, 
+            icon: 'question', 
+            showCancelButton: true, 
+            confirmButtonText: 'Ya, Proses!', 
+            confirmButtonColor: '#2271b1' 
+        }).then((res) => { 
+            if (res.isConfirmed) processTransaction(mode, custData); 
+        });
+    }
+
+    function processTransaction(mode, custData) {
+        Swal.fire({title: 'Memproses...', text: 'Mengupload data...', didOpen: () => Swal.showLoading()});
+        
+        let formData = new FormData();
+        formData.append('action', 'puri_pos_checkout');
+        formData.append('nonce', '<?php echo wp_create_nonce("puri_pos_checkout"); ?>');
+        formData.append('cart', JSON.stringify(Cockpit.cart));
+        formData.append('cust_mode', mode);
+        
+        if(mode === 'walkin') {
+            formData.append('wic_name', custData.name); 
+            formData.append('wic_nik', custData.nik); 
+            formData.append('wic_phone', custData.phone); 
+            formData.append('wic_address', custData.address); 
+            formData.append('wic_ktp', $('#wic_ktp')[0].files[0]);
+        } else { 
+            formData.append('cust_id', custData.id); 
+        }
+        
+        $.ajax({ 
+            url: ajaxurl, 
+            type: 'POST', 
+            data: formData, 
+            processData: false, 
+            contentType: false, 
+            success: function(response) { 
+                if(response.success) { 
+                    Swal.fire('Sukses!', 'Ref: ' + response.data.ref_id, 'success'); 
+                    Cockpit.cart = []; 
+                    // Reset Form WIC
+                    $('#wic_name').val(''); $('#wic_nik').val(''); 
+                    $('#wic_phone').val(''); $('#wic_address').val(''); $('#wic_ktp').val(''); 
+                    // Reset UI
+                    $('#btn_clear_form').click(); 
+                    renderCart(); 
+                    loadStockAndHistory(); 
+                } else { 
+                    Swal.fire('Gagal', response.data, 'error'); 
+                } 
+            }, 
+            error: function() { 
+                Swal.fire('Error', 'Server Error', 'error'); 
+            } 
+        });
+    }
+
+    function loadStockAndHistory() {
+        $.get(ajaxurl, { action: 'puri_pos_get_stock_summary' }, function(res){ 
+            if(res.success) { 
+                let html = ''; 
+                res.data.forEach(s => { 
+                    html += `<tr><td>${s.name}</td><td class="tr"><strong>${s.qty}</strong></td><td class="tr">${s.sales_today}</td></tr>`; 
+                }); 
+                $('#stock_table tbody').html(html); 
+            } 
+        });
+        
+        $.get(ajaxurl, { action: 'puri_pos_get_daily_mutation' }, function(res){ 
+            if(res.success) { 
+                let html = ''; 
+                res.data.forEach(m => { 
+                    html += `<tr><td>${m.time}</td><td>${m.ref_id}</td><td class="tr">${m.total_riyal}</td><td class="tr">${m.total_idr}</td><td><i class="fa fa-check" style="color:green"></i></td></tr>`; 
+                }); 
+                $('#history_table tbody').html(html); 
+            } 
+        });
+    }
+    
+    // Jalankan Init
+    init();
+});
+</script>
+
+ <?php
     }
 
     /**
@@ -467,40 +676,88 @@ class Puri_Cockpit_POS {
      * ------------------------------------------------
      */
     
-    private function get_items_for_dropdown() {
+private function get_items_for_dropdown() {
         global $wpdb;
-        $posts = get_posts(['post_type'=>'pr_item', 'posts_per_page'=>-1, 'post_status'=>'publish', 'orderby'=>'title', 'order'=>'ASC']);
+        
+        // 1. Ambil Data Post WordPress
+        $posts = get_posts([
+            'post_type'      => 'pr_item', 
+            'posts_per_page' => -1, 
+            'post_status'    => 'publish', 
+            'orderby'        => 'title', 
+            'order'          => 'ASC'
+        ]);
+        
         $results = [];
-        $tbl_stock = puri_table_name('T_STOCK');
+        
+        // 2. Definisi Tabel Engine
         $tbl_items = puri_table_name('T_ITEMS');
+        $tbl_stock = puri_table_name('T_STOCK');
+        $tbl_locks = puri_table_name('T_LOCKS');
 
         foreach($posts as $p) {
-            $denom = get_post_meta($p->ID, '_puri_denom', true) ?: 0;
-            $rate = get_post_meta($p->ID, '_puri_sell_rate', true) ?: 0;
             $img = get_the_post_thumbnail_url($p->ID, 'thumbnail');
             
-            // --- FIX STOCK LOGIC (v6.1.0) ---
+            // Ambil SKU dari Post Meta
             $sku = get_post_meta($p->ID, 'item_sku_code', true); 
-            if (!$sku) $sku = get_post_meta($p->ID, '_puri_item_sku', true); // Fallback
+            if (!$sku) $sku = get_post_meta($p->ID, '_puri_item_sku', true); 
 
+            // Default Values (Fallback ke WP Meta jika SQL gagal)
+            // Kita cek beberapa kemungkinan nama key agar tidak miss
+            $denom = get_post_meta($p->ID, '_puri_denom', true);
+            if(!$denom) $denom = get_post_meta($p->ID, 'denom', true);       // Cek key 'denom'
+            if(!$denom) $denom = get_post_meta($p->ID, 'nilai_denom', true); // Cek key 'nilai_denom'
+            if(!$denom) $denom = 0;
+
+            $rate = get_post_meta($p->ID, '_puri_sell_rate', true) ?: 0;
             $stock = 0;
-            if ($sku && $tbl_stock && $tbl_items) {
-                // Query: T_STOCK JOIN T_ITEMS
-                $query = "SELECT s.balance FROM $tbl_stock s INNER JOIN $tbl_items i ON s.item_id = i.id WHERE i.sku = %s AND s.location_id = 'laci_kasir' LIMIT 1";
-                $stock = $wpdb->get_var($wpdb->prepare($query, $sku));
+            
+            // --- FIX TOTAL: AMBIL DATA DARI ENGINE SQL (Lebih Akurat) ---
+            if ($sku && $tbl_items) {
+                // Kita ambil Stock, Denom, dan Rate sekaligus dari T_ITEMS
+                $query = "
+                    SELECT 
+                        (COALESCE(s.qty, 0) - COALESCE(l.qty_lock, 0)) as ready_stock,
+                        i.denom_value,
+                        i.sell_rate
+                    FROM {$tbl_items} i 
+                    LEFT JOIN {$tbl_stock} s ON i.id = s.item_id AND s.location_id = 'laci_kasir'
+                    LEFT JOIN {$tbl_locks} l ON i.id = l.item_id
+                    WHERE i.sku = %s 
+                    LIMIT 1
+                ";
+                
+                $engine_data = $wpdb->get_row($wpdb->prepare($query, $sku));
+                
+                if ($engine_data) {
+                    $stock = $engine_data->ready_stock;
+                    
+                    // PRIORITAS UTAMA: Pakai data Denom & Rate dari SQL Engine jika ada
+                    // Ini memperbaiki masalah denom 0
+                    if (floatval($engine_data->denom_value) > 0) {
+                        $denom = floatval($engine_data->denom_value);
+                    }
+                    if (floatval($engine_data->sell_rate) > 0) {
+                        $rate = floatval($engine_data->sell_rate);
+                    }
+                }
             }
 
+            // Assign data ke object
             $p->denom = $denom;
             $p->sell_rate = $rate;
             $p->stock_laci = $stock ?: 0;
             $p->img_url = $img;
+            
             $results[] = $p;
         }
 
+        // Sort by Denom Value
         usort($results, function($a, $b) { return $a->denom <=> $b->denom; });
+        
         return $results;
-    }
-
+    }	
+	
     private function get_customers_for_dropdown() {
         $posts = get_posts(['post_type' => 'pr_customer', 'posts_per_page' => -1, 'post_status' => 'publish', 'orderby' => 'title', 'order' => 'ASC']);
         $results = [];
@@ -520,6 +777,7 @@ class Puri_Cockpit_POS {
     }
 
     // === CHECKOUT BACKEND ===
+// === CHECKOUT BACKEND (REVISI FIX COLUMN QTY) ===
     public function ajax_process_checkout() {
         check_ajax_referer('puri_pos_checkout', 'nonce');
         if(!current_user_can('manage_options')) wp_send_json_error('Unauthorized');
@@ -527,11 +785,14 @@ class Puri_Cockpit_POS {
         global $wpdb;
         $cart = json_decode(stripslashes($_POST['cart']), true);
         $cust_mode = sanitize_text_field($_POST['cust_mode']);
+        
         if(empty($cart)) wp_send_json_error('Keranjang kosong');
 
         $wpdb->query('START TRANSACTION');
         try {
-            $customer_id = 0; $customer_name = '';
+            // 1. Identifikasi Customer
+            $customer_id = 0; 
+            $customer_name = '';
 
             if($cust_mode === 'walkin') {
                 $wic_name = sanitize_text_field($_POST['wic_name']);
@@ -539,6 +800,7 @@ class Puri_Cockpit_POS {
                 $wic_phone = sanitize_text_field($_POST['wic_phone']);
                 $wic_address = sanitize_textarea_field($_POST['wic_address']);
 
+                // Insert Customer Baru
                 $customer_id = wp_insert_post(['post_type'=>'pr_customer', 'post_title'=>$wic_name . ' (Walk-in)', 'post_status'=>'publish']);
                 if(is_wp_error($customer_id)) throw new Exception('Gagal membuat data pelanggan.');
 
@@ -547,6 +809,7 @@ class Puri_Cockpit_POS {
                 update_post_meta($customer_id, '_puri_cust_nik', $wic_nik);
                 update_post_meta($customer_id, '_puri_cust_address', $wic_address);
 
+                // Upload KTP
                 if (!empty($_FILES['wic_ktp']['name'])) {
                     require_once(ABSPATH . 'wp-admin/includes/image.php');
                     require_once(ABSPATH . 'wp-admin/includes/file.php');
@@ -563,50 +826,84 @@ class Puri_Cockpit_POS {
 
             $ref_id = 'POS-' . date('YmdHis') . '-' . rand(100,999);
             $trx_date = current_time('mysql');
-            $total_riyal = 0; $total_idr = 0;
+            $total_riyal = 0; 
+            $total_idr = 0;
 
+            // 2. Loop Items & Update Stok
             foreach($cart as $item) {
-                // ... (Logic Checkout using T_ITEMS mapping for Stock update) ...
-                $item_id = intval($item['id']); // This is Post ID
+                $item_id = intval($item['id']); // Ini Post ID WordPress
                 
-                // Need to find SQL ID first for stock update
+                // Cari SQL ID (ID Engine) berdasarkan SKU
                 $sku = get_post_meta($item_id, 'item_sku_code', true);
                 if(!$sku) $sku = get_post_meta($item_id, '_puri_item_sku', true);
                 
-                $sql_id = 0;
-                if($sku) {
-                    $sql_id = $wpdb->get_var($wpdb->prepare("SELECT id FROM " . puri_table_name('T_ITEMS') . " WHERE sku = %s", $sku));
-                }
-                if(!$sql_id) throw new Exception("SKU tidak ditemukan di sistem untuk item $item_id");
+                $sql_id = $wpdb->get_var($wpdb->prepare("SELECT id FROM " . puri_table_name('T_ITEMS') . " WHERE sku = %s", $sku));
+                if(!$sql_id) throw new Exception("SKU tidak ditemukan di sistem engine untuk item ID: $item_id");
 
                 $qty = floatval($item['qty']);
-                $denom = floatval($item['denom']);
-                $rate = floatval($item['rate']);
                 
-                $tbl_stock = puri_table_name('T_STOCK');
-                $curr = $wpdb->get_var($wpdb->prepare("SELECT balance FROM $tbl_stock WHERE item_id = %d AND location_id = 'laci_kasir' FOR UPDATE", $sql_id));
-                
-                if($curr < $qty) throw new Exception("Stok fisik kurang untuk SKU: $sku (Sisa: $curr)");
+                // Validasi Data Angka
+                if ($qty <= 0) throw new Exception("Qty tidak valid untuk item $sku");
 
-                $wpdb->query($wpdb->prepare("UPDATE $tbl_stock SET balance = balance - %f, last_updated = %s WHERE item_id = %d AND location_id = 'laci_kasir'", $qty, $trx_date, $sql_id));
+                $tbl_stock = puri_table_name('T_STOCK');
                 
+                // --- FIX #1: Ganti 'balance' menjadi 'qty' di SELECT ---
+                $curr = $wpdb->get_var($wpdb->prepare(
+                    "SELECT qty FROM $tbl_stock WHERE item_id = %d AND location_id = 'laci_kasir' FOR UPDATE", 
+                    $sql_id
+                ));
+                
+                // Jika null (belum ada record), anggap 0
+                if(is_null($curr)) $curr = 0;
+                
+                // Cek Stok Cukup
+                if($curr < $qty) {
+                    throw new Exception("Stok fisik kurang untuk SKU: $sku (Sisa: $curr, Diminta: $qty)");
+                }
+
+                // --- FIX #2: Ganti 'balance' menjadi 'qty' di UPDATE ---
+                $wpdb->query($wpdb->prepare(
+                    "UPDATE $tbl_stock SET qty = qty - %f, last_updated = %s WHERE item_id = %d AND location_id = 'laci_kasir'", 
+                    $qty, $trx_date, $sql_id
+                ));
+                
+                // Catat di Ledger
                 $wpdb->insert(puri_table_name('T_LEDGER'), [
-                    'location_id' => 'laci_kasir', 'item_id' => $sql_id, 'qty_change' => -$qty,
-                    'ref_id' => $ref_id, 'description' => "POS Sales to $customer_name", 'trx_date' => $trx_date
+                    'location_id' => 'laci_kasir', 
+                    'item_id' => $sql_id, 
+                    'qty_change' => -$qty,
+                    'ref_id' => $ref_id, 
+                    'description' => "POS Sales to $customer_name", 
+                    'trx_date' => $trx_date
                 ]);
 
                 $total_riyal += ($item['riyal']);
                 $total_idr += ($item['idr']);
             }
 
-            $snapshot = ['items' => $cart, 'customer_id' => $customer_id, 'customer_name' => $customer_name, 'total_riyal' => $total_riyal, 'total_idr' => $total_idr];
+            // 3. Catat Jurnal Keuangan
+            $snapshot = [
+                'items' => $cart, 
+                'customer_id' => $customer_id, 
+                'customer_name' => $customer_name, 
+                'total_riyal' => $total_riyal, 
+                'total_idr' => $total_idr
+            ];
+            
             $wpdb->insert(puri_table_name('T_JOURNAL'), [
-                'ref_id' => $ref_id, 'trx_date' => $trx_date, 'description' => "POS Sales: $customer_name",
-                'amount_idr' => $total_idr, 'snapshot_json' => json_encode($snapshot), 'status' => 'completed'
+                'ref_id' => $ref_id, 
+                'trx_date' => $trx_date, 
+                'description' => "POS Sales: $customer_name",
+                'amount_idr' => $total_idr, 
+                'snapshot_json' => json_encode($snapshot), 
+                'status' => 'completed'
             ]);
 
             $wpdb->query('COMMIT');
+            
+            // Optional Webhook
             if(function_exists('puri_send_to_external_webhook')) puri_send_to_external_webhook($ref_id);
+            
             wp_send_json_success(['ref_id' => $ref_id]);
 
         } catch (Exception $e) {
