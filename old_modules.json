@@ -3,6 +3,7 @@
     "mc-00-admin-hub.php",
     "mc-01-core.php",
     "mc-03-engine.php",
+    "mc-19-crud-partnership.php",
     "mc-02-data-model.php",
     "mc-04-procurement.php",
     "mc-05-pos.php",
@@ -19,10 +20,11 @@
     "mc-16-monitoring.php",
     "mc-17-maintenance.php",
     "mc-18-webhook.php",
-    "mc-19-crud-partnership.php",
     "mc-20-inventory-ledger.php",
     "mc-21-daily-riyal.php",
     "mc-22-pivot.php",
-    "mc-23-coa-manager.php"
+    "mc-23-coa-manager.php",
+    "mc-24-user-role-manager.php",
+    "mc-25-cockpit-extended-pos.php"
   ]
 }
