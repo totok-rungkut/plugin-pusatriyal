@@ -912,35 +912,77 @@ private function get_items_for_dropdown() {
         }
     }
 
-    public function ajax_get_daily_mutation() {
+public function ajax_get_daily_mutation() {
         global $wpdb;
-        $today = date('Y-m-d');
-        $rows = $wpdb->get_results($wpdb->prepare("SELECT ref_id, trx_date, snapshot_json FROM " . puri_table_name('T_JOURNAL') . " WHERE trx_date LIKE %s ORDER BY trx_date DESC", $today.'%'));
+        
+        // Hapus filter "WHERE trx_date LIKE %s" agar tidak ada masalah timezone.
+        // Kita ambil 20 transaksi penjualan (POS) terakhir saja.
+        
+        $rows = $wpdb->get_results(
+            "SELECT ref_id, trx_date, snapshot_json, amount_idr 
+             FROM " . puri_table_name('T_JOURNAL') . " 
+             WHERE ref_id LIKE 'POS-%' 
+             ORDER BY trx_date DESC 
+             LIMIT 20"
+        );
+        
         $data = [];
-        foreach($rows as $r) {
-            $json = json_decode($r->snapshot_json, true);
-            $data[] = ['time' => date('H:i', strtotime($r->trx_date)), 'ref_id' => $r->ref_id, 'total_riyal' => number_format($json['total_riyal'] ?? 0), 'total_idr' => number_format($json['total_idr'] ?? 0)];
+        if($rows) {
+            foreach($rows as $r) {
+                $json = json_decode($r->snapshot_json, true);
+                
+                // Ambil nilai riyal/idr, fallback ke 0 jika error
+                $riyal = isset($json['total_riyal']) ? floatval($json['total_riyal']) : 0;
+                $idr   = isset($json['total_idr']) ? floatval($json['total_idr']) : floatval($r->amount_idr);
+
+                $data[] = [
+                    'time' => date('d/m H:i', strtotime($r->trx_date)), // Tambah tgl agar jelas
+                    'ref_id' => $r->ref_id, 
+                    'total_riyal' => number_format($riyal), 
+                    'total_idr' => number_format($idr)
+                ];
+            }
         }
         wp_send_json_success($data);
     }
 
-    public function ajax_get_stock_summary() {
+
+public function ajax_get_stock_summary() {
         global $wpdb;
-        $today = date('Y-m-d');
-        // Fix: Join with T_STOCK correctly using SQL ID mapping if needed, but T_STOCK item_id is SQL ID.
-        // T_ITEMS has name. We need to join T_STOCK s -> T_ITEMS i.
-        $sql = "SELECT i.name as name, s.balance as qty, i.id as item_id 
+        $today = current_time('Y-m-d'); // Fix Timezone untuk sales today
+        
+        // PERBAIKAN FATAL: Mengganti 's.balance' menjadi 's.qty'
+        // Ini akan membaca kolom yang sama dengan yang diupdate oleh checkout.
+        
+        $sql = "SELECT i.name as name, s.qty as qty, i.id as item_id 
                 FROM " . puri_table_name('T_STOCK') . " s
                 JOIN " . puri_table_name('T_ITEMS') . " i ON s.item_id = i.id
-                WHERE s.location_id = 'laci_kasir' ORDER BY i.name ASC";
+                WHERE s.location_id = 'laci_kasir' 
+                ORDER BY i.name ASC";
+                
         $results = $wpdb->get_results($sql);
+        
         $final = [];
-        foreach($results as $row) {
-            $sales = $wpdb->get_var($wpdb->prepare("SELECT SUM(qty_change) FROM " . puri_table_name('T_LEDGER') . " WHERE location_id='laci_kasir' AND item_id = %d AND trx_date LIKE %s AND qty_change < 0", $row->item_id, $today.'%'));
-            $final[] = ['name' => $row->name, 'qty' => number_format($row->qty), 'sales_today' => number_format(abs($sales ?? 0))];
+        if($results) {
+            foreach($results as $row) {
+                // Hitung penjualan hari ini
+                $sales = $wpdb->get_var($wpdb->prepare(
+                    "SELECT SUM(qty_change) FROM " . puri_table_name('T_LEDGER') . " 
+                     WHERE location_id='laci_kasir' AND item_id = %d 
+                     AND trx_date LIKE %s AND qty_change < 0", 
+                    $row->item_id, $today.'%'
+                ));
+                
+                $final[] = [
+                    'name' => $row->name, 
+                    'qty' => number_format($row->qty), // Pastikan ini s.qty
+                    'sales_today' => number_format(abs($sales ?? 0))
+                ];
+            }
         }
         wp_send_json_success($final);
     }
+
 }
 
 new Puri_Cockpit_POS();
