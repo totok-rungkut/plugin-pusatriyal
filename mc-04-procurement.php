@@ -683,9 +683,9 @@ function puri_handle_procurement_submit() {
         
         foreach ($items as $it) {
             $item_id = intval($it['id'] ?? 0);
-            $qty = floatval(str_replace(['. ', ','], ['', '. '], $it['qty'] ?? '0'));
-            $kurs = floatval(str_replace(['.', ','], ['', '.'], $it['kurs'] ?? '0'));
-            $total_riyal = floatval(str_replace(['.', ','], ['', '.'], $it['total_riyal'] ?? '0'));
+$qty = floatval(str_replace(['.', ','], ['', '.'], $it['qty'] ?? '0'));
+$kurs = floatval(str_replace(['.', ','], ['', '.'], $it['kurs'] ?? '0'));
+$total_riyal = floatval(str_replace(['.', ','], ['', '.'], $it['total_riyal'] ?? '0'));
             
             if ($item_id <= 0 || $qty <= 0 || $kurs <= 0) continue;
             
