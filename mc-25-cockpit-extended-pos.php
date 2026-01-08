@@ -224,11 +224,34 @@ class Puri_Cockpit_POS {
 
                 <div class="flex-row bottom-row">
                     <div class="flex-col col-history">
-                        <div class="panel panel-history">
-                            <div class="panel-header"><span><i class="fa-solid fa-clock-rotate-left"></i> Mutasi Harian</span><button class="button button-small" id="btn_refresh_history"><i class="fa-solid fa-sync"></i></button></div>
-                            <div class="panel-body table-scroll"><table class="wp-list-table widefat striped dense" id="history_table"><thead><tr><th>Jam</th><th>Ref ID</th><th class="tr">Riyal</th><th class="tr">IDR</th><th width="30"></th></tr></thead><tbody></tbody></table></div>
-                        </div>
-                    </div>
+<div class="panel panel-history">
+    <div class="panel-header">
+        <span><i class="fa-solid fa-clock-rotate-left"></i> Mutasi Harian</span>
+        
+        <div id="box_history_summary" class="hidden" style="flex: 1; text-align: right; margin-right: 15px; font-size: 11px;">
+            <span style="color:#2271b1; font-weight:700;">SAR <span id="val_sum_riyal">0</span></span>
+            <span style="margin: 0 5px; color:#ccc;">|</span>
+            <span style="color:#d63638; font-weight:700;">Rp <span id="val_sum_idr">0</span></span>
+        </div>
+        
+        <button class="button button-small" id="btn_refresh_history" title="Refresh Data"><i class="fa-solid fa-sync"></i></button>
+    </div>
+    
+<div class="panel-body table-scroll"> <table class="wp-list-table widefat striped dense" id="history_table">
+        <thead>
+            <tr> <th>Jam</th>
+                <th>Ref ID</th>
+                <th class="tr">Riyal</th>
+                <th class="tr">IDR</th>
+                <th width="30"></th>
+            </tr>
+        </thead>
+        <tbody></tbody>
+    </table>
+</div>
+
+</div>
+ </div>
                     <div class="flex-col col-stock">
                         <div class="panel panel-stock">
                             <div class="panel-header"><span><i class="fa-solid fa-boxes-stacked"></i> Stok Laci & Ikhtisar</span></div>
@@ -283,8 +306,34 @@ class Puri_Cockpit_POS {
             .summary-line.main { font-size: 18px; font-weight: bold; border-top: 1px dashed #ccc; padding-top: 12px; margin-top: 8px; }
             .val-idr { color: #d63638; }
             .button-hero { height: 45px !important; font-size: 15px !important; width: 100%; margin-top: 15px !important; justify-content: center; display: flex; gap: 8px; align-items: center; }
-            .table-scroll { max-height: 250px; overflow-y: auto; padding: 0; }
-            
+/* Container Scroll */
+            .table-scroll { 
+                height: 250px;        /* Tinggi tetap agar layout konsisten */
+                overflow-y: auto;     /* Munculkan scrollbar jika konten panjang */
+                padding: 0; 
+                border-bottom: 1px solid #ddd;
+                position: relative;
+                background: #fff;
+            }
+
+            /* Agar Header Tabel Tetap Menempel di Atas (Sticky) */
+            .table-scroll thead th {
+                position: sticky;
+                top: 0;
+                background: #f0f0f1;  /* Warna background header */
+                z-index: 10;          /* Agar header selalu di atas data */
+                box-shadow: 0 1px 2px rgba(0,0,0,0.1); /* Sedikit bayangan pemisah */
+            }
+
+            /* Perbaikan tampilan tabel di dalam scroll */
+            #history_table, #stock_table {
+                border-top: none;
+                margin-top: 0;
+                width: 100%;
+                border-collapse: collapse;
+            }
+
+			
             @media (max-width: 1000px) {
                 .flex-row { flex-direction: column; }
                 .col-left-input, .col-right-cart { width: 100%; flex: auto; }
@@ -651,16 +700,45 @@ jQuery(document).ready(function($) {
             } 
         });
         
-        $.get(ajaxurl, { action: 'puri_pos_get_daily_mutation' }, function(res){ 
-            if(res.success) { 
-                let html = ''; 
-                res.data.forEach(m => { 
-                    html += `<tr><td>${m.time}</td><td>${m.ref_id}</td><td class="tr">${m.total_riyal}</td><td class="tr">${m.total_idr}</td><td><i class="fa fa-check" style="color:green"></i></td></tr>`; 
-                }); 
-                $('#history_table tbody').html(html); 
-            } 
+$.ajax({
+            url: ajaxurl,
+            data: { action: 'puri_pos_get_daily_mutation' },
+            cache: false, 
+            success: function(res) { 
+                if(res.success) { 
+                    let html = ''; 
+                    let sumRiyal = 0;
+                    let sumIDR = 0;
+
+                    res.data.forEach(m => { 
+                        // Parse angka dari string format (misal: "43,500" -> 43500)
+                        let valRiyal = parseFloat(m.total_riyal.replace(/,/g, '')) || 0;
+                        let valIDR = parseFloat(m.total_idr.replace(/,/g, '')) || 0;
+
+                        // Akumulasi Total
+                        sumRiyal += valRiyal;
+                        sumIDR += valIDR;
+
+                        html += `<tr>
+                            <td>${m.time}</td>
+                            <td>${m.ref_id}</td>
+                            <td class="tr">${m.total_riyal}</td>
+                            <td class="tr">${m.total_idr}</td>
+                            <td><i class="fa fa-check" style="color:green"></i></td>
+                        </tr>`; 
+                    }); 
+                    
+                    $('#history_table tbody').html(html); 
+
+                    // Update Header Summary
+                    $('#val_sum_riyal').text(sumRiyal.toLocaleString('en-US'));
+                    $('#val_sum_idr').text(sumIDR.toLocaleString('id-ID'));
+                    $('#box_history_summary').removeClass('hidden'); // Tampilkan summary
+                } 
+            }
         });
-    }
+		
+  }
     
     // Jalankan Init
     init();
@@ -778,13 +856,14 @@ private function get_items_for_dropdown() {
 
     // === CHECKOUT BACKEND ===
 // === CHECKOUT BACKEND (REVISI FIX COLUMN QTY) ===
-    public function ajax_process_checkout() {
+public function ajax_process_checkout() {
         check_ajax_referer('puri_pos_checkout', 'nonce');
         if(!current_user_can('manage_options')) wp_send_json_error('Unauthorized');
 
         global $wpdb;
         $cart = json_decode(stripslashes($_POST['cart']), true);
         $cust_mode = sanitize_text_field($_POST['cust_mode']);
+        $current_user_id = get_current_user_id(); // Butuh ID user untuk T_JOURNAL
         
         if(empty($cart)) wp_send_json_error('Keranjang kosong');
 
@@ -830,45 +909,42 @@ private function get_items_for_dropdown() {
             $total_idr = 0;
 
             // 2. Loop Items & Update Stok
+            $tbl_items = puri_table_name('T_ITEMS');
+            $tbl_stock = puri_table_name('T_STOCK');
+            $tbl_ledger = puri_table_name('T_LEDGER');
+            
             foreach($cart as $item) {
-                $item_id = intval($item['id']); // Ini Post ID WordPress
+                $item_id = intval($item['id']); 
                 
-                // Cari SQL ID (ID Engine) berdasarkan SKU
+                // Cari SQL ID berdasarkan SKU
                 $sku = get_post_meta($item_id, 'item_sku_code', true);
                 if(!$sku) $sku = get_post_meta($item_id, '_puri_item_sku', true);
                 
-                $sql_id = $wpdb->get_var($wpdb->prepare("SELECT id FROM " . puri_table_name('T_ITEMS') . " WHERE sku = %s", $sku));
+                $sql_id = $wpdb->get_var($wpdb->prepare("SELECT id FROM $tbl_items WHERE sku = %s", $sku));
                 if(!$sql_id) throw new Exception("SKU tidak ditemukan di sistem engine untuk item ID: $item_id");
 
                 $qty = floatval($item['qty']);
-                
-                // Validasi Data Angka
                 if ($qty <= 0) throw new Exception("Qty tidak valid untuk item $sku");
 
-                $tbl_stock = puri_table_name('T_STOCK');
-                
-                // --- FIX #1: Ganti 'balance' menjadi 'qty' di SELECT ---
+                // Cek Stok (Gunakan kolom QTY)
                 $curr = $wpdb->get_var($wpdb->prepare(
                     "SELECT qty FROM $tbl_stock WHERE item_id = %d AND location_id = 'laci_kasir' FOR UPDATE", 
                     $sql_id
                 ));
-                
-                // Jika null (belum ada record), anggap 0
                 if(is_null($curr)) $curr = 0;
                 
-                // Cek Stok Cukup
                 if($curr < $qty) {
                     throw new Exception("Stok fisik kurang untuk SKU: $sku (Sisa: $curr, Diminta: $qty)");
                 }
 
-                // --- FIX #2: Ganti 'balance' menjadi 'qty' di UPDATE ---
+                // Update Stok
                 $wpdb->query($wpdb->prepare(
                     "UPDATE $tbl_stock SET qty = qty - %f, last_updated = %s WHERE item_id = %d AND location_id = 'laci_kasir'", 
                     $qty, $trx_date, $sql_id
                 ));
                 
-                // Catat di Ledger
-                $wpdb->insert(puri_table_name('T_LEDGER'), [
+                // Insert Ledger
+                $res_ledger = $wpdb->insert($tbl_ledger, [
                     'location_id' => 'laci_kasir', 
                     'item_id' => $sql_id, 
                     'qty_change' => -$qty,
@@ -876,12 +952,14 @@ private function get_items_for_dropdown() {
                     'description' => "POS Sales to $customer_name", 
                     'trx_date' => $trx_date
                 ]);
+                if($res_ledger === false) throw new Exception("Gagal catat ledger untuk $sku");
 
                 $total_riyal += ($item['riyal']);
                 $total_idr += ($item['idr']);
             }
 
-            // 3. Catat Jurnal Keuangan
+            // 3. Catat Jurnal Keuangan (DOUBLE ENTRY FIX)
+            $tbl_journal = puri_table_name('T_JOURNAL');
             $snapshot = [
                 'items' => $cart, 
                 'customer_id' => $customer_id, 
@@ -890,18 +968,38 @@ private function get_items_for_dropdown() {
                 'total_idr' => $total_idr
             ];
             
-            $wpdb->insert(puri_table_name('T_JOURNAL'), [
-                'ref_id' => $ref_id, 
-                'trx_date' => $trx_date, 
-                'description' => "POS Sales: $customer_name",
-                'amount_idr' => $total_idr, 
-                'snapshot_json' => json_encode($snapshot), 
-                'status' => 'completed'
+            // A. DEBIT: KAS LACI (1101) - Bertambah
+            // Inilah data yang dicari oleh panel Mutasi Harian!
+            $res_j1 = $wpdb->insert($tbl_journal, [
+                'trx_date' => $trx_date,
+                'ref_id' => $ref_id,
+                'account_code' => '1101', // Kode Akun Kas Laci
+                'debit' => $total_idr,    // Uang Masuk
+                'credit' => 0,
+                'description' => "Penjualan POS: $customer_name",
+                'snapshot_json' => json_encode($snapshot), // Simpan detail di sisi Debit
+                'created_by' => $current_user_id
             ]);
+            
+            if($res_j1 === false) throw new Exception("Gagal catat jurnal Debit (Kas)");
+
+            // B. KREDIT: PENDAPATAN VALAS (4100) - Bertambah
+            $res_j2 = $wpdb->insert($tbl_journal, [
+                'trx_date' => $trx_date,
+                'ref_id' => $ref_id,
+                'account_code' => '4100', // Kode Akun Pendapatan
+                'debit' => 0,
+                'credit' => $total_idr,   // Pendapatan bertambah di kredit
+                'description' => "Pendapatan Jual: $customer_name",
+                'snapshot_json' => null,  // Tidak perlu duplikasi JSON
+                'created_by' => $current_user_id
+            ]);
+
+            if($res_j2 === false) throw new Exception("Gagal catat jurnal Kredit (Pendapatan)");
 
             $wpdb->query('COMMIT');
             
-            // Optional Webhook
+            // Webhook Opsional
             if(function_exists('puri_send_to_external_webhook')) puri_send_to_external_webhook($ref_id);
             
             wp_send_json_success(['ref_id' => $ref_id]);
@@ -912,41 +1010,50 @@ private function get_items_for_dropdown() {
         }
     }
 
+
 public function ajax_get_daily_mutation() {
         global $wpdb;
         
-        // Hapus filter "WHERE trx_date LIKE %s" agar tidak ada masalah timezone.
-        // Kita ambil 20 transaksi penjualan (POS) terakhir saja.
+        // 1. Ambil Tanggal Hari Ini (Sesuai Timezone WordPress/WIB)
+        // Format: YYYY-MM-DD (misal: 2026-01-08)
+        $today_str = current_time('Y-m-d');
         
-        $rows = $wpdb->get_results(
-            "SELECT ref_id, trx_date, snapshot_json, amount_idr 
+        // 2. Query Database
+        // - HAPUS 'LIMIT 20'
+        // - TAMBAHKAN filter 'trx_date LIKE $today%'
+        // - TETAP filter 'account_code = 1101' (agar tidak duplikat & bisa ambil total IDR)
+        
+        $rows = $wpdb->get_results($wpdb->prepare(
+            "SELECT ref_id, trx_date, snapshot_json, debit 
              FROM " . puri_table_name('T_JOURNAL') . " 
-             WHERE ref_id LIKE 'POS-%' 
-             ORDER BY trx_date DESC 
-             LIMIT 20"
-        );
+             WHERE ref_id LIKE 'POS-%%' 
+             AND account_code = '1101' 
+             AND trx_date LIKE %s 
+             ORDER BY trx_date DESC",
+            $today_str . '%' 
+        ));
         
         $data = [];
         if($rows) {
             foreach($rows as $r) {
+                // Decode JSON untuk mendapatkan Total Riyal (karena jurnal hanya simpan IDR)
                 $json = json_decode($r->snapshot_json, true);
                 
-                // Ambil nilai riyal/idr, fallback ke 0 jika error
                 $riyal = isset($json['total_riyal']) ? floatval($json['total_riyal']) : 0;
-                $idr   = isset($json['total_idr']) ? floatval($json['total_idr']) : floatval($r->amount_idr);
+                $idr   = floatval($r->debit); // Ambil langsung dari kolom Debit
 
                 $data[] = [
-                    'time' => date('d/m H:i', strtotime($r->trx_date)), // Tambah tgl agar jelas
+                    'time' => date('H:i', strtotime($r->trx_date)), 
                     'ref_id' => $r->ref_id, 
                     'total_riyal' => number_format($riyal), 
                     'total_idr' => number_format($idr)
                 ];
             }
         }
+        
+        // Kirim data ke JS (JS akan menjumlahkan ulang untuk Header Summary)
         wp_send_json_success($data);
     }
-
-
 public function ajax_get_stock_summary() {
         global $wpdb;
         $today = current_time('Y-m-d'); // Fix Timezone untuk sales today
