@@ -50,7 +50,7 @@ echo "<div class='notice notice-warning is-dismissible'>
     ?>
 
     <div class="wrap puri-pro-ui">
-        <h1 class="wp-heading-inline">📂 Chart of Accounts</h1>
+        <h1 class="wp-heading-inline">📂 Chart of Accounts v.GEMINI</h1>
         <button class="page-title-action btn-new-account" onclick="openModal('create')">Tambah Akun Baru</button>
         <hr class="wp-header-end">
 
