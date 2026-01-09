@@ -204,7 +204,17 @@ function puri_seed_coa() {
     global $wpdb;
     $table = puri_table_name('T_CHART');
     if (empty($table)) return;
+
+    // 1. Buat tabel jika belum ada
     $wpdb->query("CREATE TABLE IF NOT EXISTS {$table} (code varchar(20) PRIMARY KEY, name varchar(100), type varchar(20), is_cash tinyint(1))");
+
+    // 2. KOREKSI: Cek apakah tabel sudah berisi data
+    $count = $wpdb->get_var("SELECT COUNT(*) FROM {$table}");
+    
+    // 3. Hanya jalankan seeding jika tabel masih kosong (0)
+    if ( intval($count) > 0 ) {
+        return; // Sudah ada data, jangan ditimpa lagi
+    }
 
     $accounts = [
         ['1101', 'Kas Laci Kasir', 'ASSET', 1],
@@ -212,8 +222,11 @@ function puri_seed_coa() {
         ['1401', 'Persediaan Valas', 'ASSET', 0],
         ['3100', 'Modal Disetor', 'EQUITY', 0],
         ['4100', 'Pendapatan Valas', 'REVENUE', 0],
-        ['6001', 'Biaya Listrik & Air', 'EXPENSE', 0],
-        ['6002', 'Biaya Gaji', 'EXPENSE', 0]
+        ['5100', 'Harga Pokok Penjualan (cogs)', 'EXPENSE', 0],
+        ['5201', 'Biaya Retribusi', 'EXPENSE', 0],
+        ['5202', 'Biaya Wifi', 'EXPENSE', 0],
+        ['5203', 'Biaya Gaji', 'EXPENSE', 0],
+        ['5201', 'Biaya Listrik', 'EXPENSE', 0]
     ];
 
     foreach ($accounts as $acc) {
