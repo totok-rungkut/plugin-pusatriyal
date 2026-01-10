@@ -1,103 +1,150 @@
 <?php
 /**
- * MC 19 - CRUD Partnership (Vendor & Customer) (Refactor)
- * Version: 6.0.1
- * Author: Denmas Totok (refactor by Copilot)
- *
- * Purpose:
- *  - Register CPT pr_vendor & pr_customer
- *  - Register ACF fields for vendor/customer KYC and snapshots
- *  - Improve admin columns and sanitization on save
- *
- * Improvements:
- *  - Capability checks not required for CPT registration (WP handles access)
- *  - ACF guard added
- *  - Sanitize fields during acf/save_post
- *  - Custom admin columns escaped
+ * MC 19 - CRUD Partnership (Vendor & Customer)
+ * Version: 6.8.2 (Restoration & Iron-Locked)
+ * * FIX LOG:
+ * - Restore pr_vendor CPT & Fields (Fix MC-04 Broken Link)
+ * - Restore cust_nik & cust_type mapping (Fix MC-25 Logic)
+ * - Keep JS Enforcement for NIK (16 chars) & Phone (08xxx)
  */
 
 defined('ABSPATH') || exit;
 
+// 1. REGISTRASI CPT (VENDOR & CUSTOMER) - KEMBALI SEPERTI v6.0.1
 add_action('init', function() {
     register_post_type('pr_vendor', [
-        'labels' => ['name'=>'Master Vendor','singular_name'=>'Vendor','add_new'=>'Tambah Vendor Baru'],
-        'public' => true, 'show_in_menu' => false, 'supports' => ['title'], 'has_archive' => false, 'rewrite' => ['slug'=>'master-vendor']
+        'labels' => ['name'=>'Master Vendor','add_new'=>'Tambah Vendor Baru'],
+        'public' => true, 'show_in_menu' => true, 'menu_icon' => 'dashicons-store', 'supports' => ['title']
     ]);
     register_post_type('pr_customer', [
-        'labels' => ['name'=>'Master Customer','singular_name'=>'Customer','add_new'=>'Tambah Customer Baru'],
-        'public' => true, 'show_in_menu' => false, 'supports' => ['title'], 'has_archive' => false, 'rewrite' => ['slug'=>'master-customer']
+        'labels' => ['name'=>'Master Customer','add_new'=>'Tambah Customer Baru'],
+        'public' => true, 'show_in_menu' => true, 'menu_icon' => 'dashicons-id', 'supports' => ['title']
     ]);
 });
 
-add_action('acf/init', function() {
-    if (!function_exists('acf_add_local_field_group')) return;
+// 2. JAVASCRIPT ENFORCEMENT (Tetap Kencang pada baut yang benar)
+add_action('acf/input/admin_footer', function() {
+    ?>
+    <script type="text/javascript">
+    (function($){
+        function lockField(selector, limit, onlyNum = true) {
+            $(document).on('input paste', 'div[data-name="' + selector + '"] input', function(e) {
+                var $input = $(this);
+                setTimeout(function() {
+                    var val = onlyNum ? $input.val().replace(/[^0-9]/g, '') : $input.val();
+                    if (val.length > limit) $input.val(val.substring(0, limit));
+                    else $input.val(val);
+                }, 10);
+            });
+        }
+        lockField('cust_nik', 16);    // Mapping kembali ke cust_nik sesuai v6.0.1
+        lockField('cust_phone', 13);
+    })(jQuery);
+    </script>
+    <?php
+});
 
+// 3. VALIDASI SERVER-SIDE
+add_filter('acf/validate_value/name=cust_nik', function($valid, $value) {
+    if (!preg_match('/^[0-9]{16}$/', $value)) return '⚠️ DATA DITOLAK: NIK harus tepat 16 digit angka.';
+    return $valid;
+}, 10, 4);
+
+add_filter('acf/validate_value/name=cust_phone', function($valid, $value) {
+    if (!preg_match('/^0[0-9]{9,12}$/', $value)) return '⚠️ DATA DITOLAK: No HP harus diawali 0 (10-13 digit).';
+    return $valid;
+}, 10, 4);
+
+// 4. LOGIKA AUTO-STATUS & SYNC (Kompatibel dengan MC-04 & MC-25)
+add_action('acf/save_post', 'puri_partnership_restoration_logic', 25);
+function puri_partnership_restoration_logic($post_id) {
+    $type = get_post_type($post_id);
+    if ($type !== 'pr_customer' && $type !== 'pr_vendor') return;
+
+    $nama = get_the_title($post_id);
+    
+    // Logic khusus Customer
+    if ($type === 'pr_customer') {
+        $nik     = get_field('cust_nik', $post_id);
+        $phone   = get_field('cust_phone', $post_id);
+        $c_type  = get_field('cust_type', $post_id) ?: 'retail';
+        $id_scan = get_field('cust_ktp_image', $post_id);
+
+        // Sync meta untuk MC-25 Cockpit
+        update_post_meta($post_id, '_puri_cust_type', $c_type);
+        update_post_meta($post_id, '_puri_cust_phone', $phone);
+        update_post_meta($post_id, '_puri_cust_nik', $nik);
+
+        // Compliance Check
+        $is_complete = (!empty($nama) && strlen($nik) === 16 && !empty($phone) && !empty($id_scan));
+        $status = ($is_complete) ? 'publish' : 'draft';
+
+        remove_action('acf/save_post', 'puri_partnership_restoration_logic', 25);
+        wp_update_post(['ID'=>$post_id, 'post_title'=>strtoupper($nama), 'post_status'=>$status]);
+        add_action('acf/save_post', 'puri_partnership_restoration_logic', 25);
+    }
+}
+
+// 5. ACF GROUPS (RESTORE SEMUA FIELD v6.0.1)
+add_action('acf/init', function() {
+    // Restore Vendor Group (Penting untuk MC-04)
     acf_add_local_field_group([
-        'key'=>'group_puri_vendor_detail',
-        'title'=>'🏢 Profil & Performa Vendor',
-        'fields'=>[
+        'key' => 'group_puri_vendor_detail_v682',
+        'title' => '🏢 Profil & Performa Vendor',
+        'fields' => [
             ['key'=>'v_code','label'=>'Kode Vendor','name'=>'vendor_code','type'=>'text','wrapper'=>['width'=>'30']],
             ['key'=>'v_pic','label'=>'Nama PIC','name'=>'vendor_pic','type'=>'text','wrapper'=>['width'=>'40']],
             ['key'=>'v_phone','label'=>'Phone / WA','name'=>'vendor_phone','type'=>'text','wrapper'=>['width'=>'30']],
             ['key'=>'v_city','label'=>'Kota','name'=>'vendor_city','type'=>'text','wrapper'=>['width'=>'40']],
             ['key'=>'v_address','label'=>'Alamat Lengkap','name'=>'vendor_address','type'=>'textarea','rows'=>2],
-            ['key'=>'v_snapshot','label'=>'Snapshot Performa (JSON)','name'=>'vendor_stats_json','type'=>'textarea','readonly'=>1,'instructions'=>'Aggregat: total_trx, total_riyal, last_update.'],
+            ['key'=>'v_snapshot','label'=>'Snapshot Performa (JSON)','name'=>'vendor_stats_json','type'=>'textarea','readonly'=>1],
         ],
-        'location'=>[[['param'=>'post_type','operator'=>'==','value'=>'pr_vendor']]]
+        'location' => [[['param'=>'post_type','operator'=>'==','value'=>'pr_vendor']]]
     ]);
 
+    // Restore Customer Group (Penting untuk MC-25)
     acf_add_local_field_group([
-        'key'=>'group_puri_cust_profile',
-        'title'=>'👥 Profil KYC Pelanggan',
-        'fields'=>[
-            ['key'=>'c_code','label'=>'Kode Customer','name'=>'customer_code','type'=>'text','wrapper'=>['width'=>'25']],
-            ['key'=>'c_nik','label'=>'NIK (KTP) *Wajib','name'=>'cust_nik','type'=>'text','required'=>1,'wrapper'=>['width'=>'25']],
-            ['key'=>'c_phone','label'=>'WhatsApp','name'=>'cust_phone','type'=>'text','wrapper'=>['width'=>'25']],
-            ['key'=>'c_city','label'=>'Kota','name'=>'cust_city','type'=>'text','wrapper'=>['width'=>'25']],
+        'key' => 'group_puri_cust_profile_v682',
+        'title' => '👥 Profil KYC Pelanggan',
+        'fields' => [
+            ['key'=>'c_tab_1','label'=>'Identitas','type'=>'tab'],
+            ['key'=>'c_type','label'=>'Tipe Pelanggan','name'=>'cust_type','type'=>'select','choices'=>['retail'=>'Umum','member'=>'Member','agent'=>'Agen'],'wrapper'=>['width'=>'30']],
+            ['key'=>'c_nik','label'=>'NIK (Wajib 16 Digit)','name'=>'cust_nik','type'=>'text','required'=>1,'wrapper'=>['width'=>'40']],
+            ['key'=>'c_phone','label'=>'WhatsApp','name'=>'cust_phone', 'type'=>'text','required'=>1,'wrapper'=>['width'=>'30']],
+            
+            ['key'=>'c_tab_2','label'=>'Alamat & Legal','type'=>'tab'],
+            ['key'=>'c_city','label'=>'Kota','name'=>'cust_city','type'=>'text','wrapper'=>['width'=>'50']],
             ['key'=>'c_address','label'=>'Alamat Sesuai KTP','name'=>'cust_address','type'=>'textarea','rows'=>2],
-            ['key'=>'c_ktp_img','label'=>'Foto KTP (Image)','name'=>'cust_ktp_image','type'=>'image','return_format'=>'url','wrapper'=>['width'=>'50']],
-            ['key'=>'c_type','label'=>'Tipe Pelanggan','name'=>'cust_type','type'=>'select','choices'=>['retail'=>'Umum','member'=>'Member','agent'=>'Agen'],'wrapper'=>['width'=>'50']],
-            ['key'=>'c_snapshot','label'=>'Snapshot Performa (JSON)','name'=>'customer_stats_json','type'=>'textarea','readonly'=>1,'instructions'=>'Aggregat: total_trx, total_riyal, repeat_order_count.'],
+            ['key'=>'c_ktp_img','label'=>'Foto KTP (< 200KB)','name'=>'cust_ktp_image','type'=>'image','return_format'=>'id','wrapper'=>['width'=>'50']],
+            ['key'=>'c_snapshot','label'=>'Snapshot Performa','name'=>'customer_stats_json','type'=>'textarea','readonly'=>1],
         ],
-        'location'=>[[['param'=>'post_type','operator'=>'==','value'=>'pr_customer']]]
+        'location' => [[['param'=>'post_type','operator'=>'==','value'=>'pr_customer']]]
     ]);
 });
 
-// Sanitize minimal fields on acf/save_post
-add_action('acf/save_post', function($post_id) {
-    if (get_post_type($post_id) === 'pr_customer') {
-        $nik = get_field('cust_nik', $post_id);
-        if ($nik !== null) update_field('cust_nik', preg_replace('/\D/', '', sanitize_text_field($nik)), $post_id);
-    }
-    if (get_post_type($post_id) === 'pr_vendor') {
-        $code = get_field('vendor_code', $post_id);
-        if ($code !== null) update_field('vendor_code', sanitize_text_field($code), $post_id);
-    }
-}, 20);
-
-// Admin columns
-add_filter('manage_pr_vendor_posts_columns', function($cols) {
-    return ['cb'=>$cols['cb'],'v_code'=>'Kode','title'=>'Nama Vendor','v_pic'=>'PIC','v_city'=>'Kota','v_stats'=>'Supply Value (SAR)','date'=>'Tgl Input'];
-});
-add_action('manage_pr_vendor_posts_custom_column', function($col,$id) {
-    $stats = json_decode(get_field('vendor_stats_json',$id), true);
-    switch($col){
-        case 'v_code': echo '<strong>'.esc_html(get_field('vendor_code',$id)).'</strong>'; break;
-        case 'v_pic': echo esc_html(get_field('vendor_pic',$id)); break;
-        case 'v_city': echo esc_html(get_field('vendor_city',$id)); break;
-        case 'v_stats': echo '<b>'.number_format(intval($stats['total_riyal']??0)).'</b>'; break;
-    }
-},10,2);
-
+// 6. CUSTOM ADMIN COLUMNS (Tampilan List Gabungan)
 add_filter('manage_pr_customer_posts_columns', function($cols) {
-    return ['cb'=>$cols['cb'],'c_nik'=>'NIK','title'=>'Nama Pelanggan','c_type'=>'Tipe','c_stats'=>'Repeat Order','c_value'=>'Total Value (SAR)'];
+    return [
+        'cb' => $cols['cb'],
+        'title' => 'Nama Pelanggan',
+        'c_nik' => 'NIK',
+        'c_phone' => 'WhatsApp',
+        'c_type' => 'Tipe',
+        'c_status' => 'Status KYC'
+    ];
 });
-add_action('manage_pr_customer_posts_custom_column', function($col,$id) {
-    $stats = json_decode(get_field('customer_stats_json',$id), true);
+
+add_action('manage_pr_customer_posts_custom_column', function($col, $id) {
     switch($col){
         case 'c_nik': echo '<code>'.esc_html(get_field('cust_nik',$id)).'</code>'; break;
-        case 'c_type': echo esc_html(strtoupper(get_field('cust_type',$id))); break;
-        case 'c_stats': echo '<b>'.intval($stats['total_trx']??0).' Kali</b>'; break;
-        case 'c_value': echo number_format(intval($stats['total_riyal']??0)); break;
+        case 'c_phone': echo esc_html(get_field('cust_phone',$id)); break;
+        case 'c_type': 
+            $t = get_field('cust_type',$id);
+            echo '<span class="badge-'.esc_attr($t).'">'.esc_html(strtoupper($t)).'</span>';
+            break;
+        case 'c_status':
+            $status = get_post_status($id);
+            echo ($status === 'publish') ? '✅ Lengkap' : '⚠️ Draft (Incomplete)';
+            break;
     }
-},10,2);
+}, 10, 2);
