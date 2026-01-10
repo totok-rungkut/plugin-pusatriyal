@@ -43,6 +43,8 @@ if (!function_exists('puri_table_name')) {
 
 // ACF Options Page: Profile & Bank (guarded)
 add_action('acf/init', function() {
+/*
+
     if (!function_exists('acf_add_options_page')) {
         // ACF not active; admin notice will be shown elsewhere
         return;
@@ -80,12 +82,14 @@ add_action('acf/init', function() {
         ],
         'location' => [[['param'=>'options_page', 'operator'=>'==', 'value'=>'puri-profile']]],
     ]);
+*/	
 });
 
 /**
  * Render Profile page dummy (guard for ACF)
  * Keamanan: only for manage_options
  */
+ /*
 function puri_render_profile_page_dummy() {
     puri_check_cap('manage_options');
     echo '<div class="wrap"><h1>🏨 Profil Perusahaan & Bank</h1>';
@@ -97,6 +101,9 @@ function puri_render_profile_page_dummy() {
     }
     echo '</div>';
 }
+*/
+
+
 
 /**
  * DB Installer v6.0.1

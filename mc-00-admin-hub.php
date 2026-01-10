@@ -86,12 +86,12 @@ add_action('admin_menu', function() {
 
 
     // PERBANKAN
-    add_menu_page('Perbankan', 'Perbankan', 'manage_options', 'puri-banking', 'puri_render_profile_page_dummy', 'dashicons-bank', 33);
+    add_menu_page('Perbankan', 'Perbankan', 'manage_options', 'puri-banking', 'puri_render_profile_page', 'dashicons-bank', 33);
     add_submenu_page('puri-banking', 'Akun Terhubung', '■ Integrasi Excel', 'manage_options', 'puri-webhook', 'puri_render_webhook_page');
 
     // SETTING (non-transaksional)
     add_menu_page('Setting', 'Setting', 'manage_options', 'puri-setting', 'puri_render_maintenance_page', 'dashicons-admin-settings', 33);
-    add_submenu_page('puri-setting', 'Profile', '◬ Profile', 'manage_options', 'puri-profile', 'puri_render_profile_page_dummy');
+    add_submenu_page('puri-setting', 'Profile', '◬ Profile', 'manage_options', 'puri-profile', 'puri_render_profile_page');
     add_submenu_page('puri-setting', 'Master Item SKU', '◬ Produk & Jasa', 'manage_options', 'edit.php?post_type=pr_item');
     add_submenu_page('puri-setting', 'Maintenance', '◬️ Maintenance', 'manage_options', 'puri-maintenance', 'puri_render_maintenance_page');
     add_submenu_page('puri-setting', 'Mass Sync SKU', '◬ Mass Sync SKU', 'manage_options', 'puri-mass-sync', 'puri_render_mass_sync_page');

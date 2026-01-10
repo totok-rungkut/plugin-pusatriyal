@@ -155,7 +155,7 @@ function puri_landing_sales() {
     puri_render_landing_cards('🛒 Penjualan & Pembayaran', 'Kelola transaksi penjualan, pelanggan, dan produk.', [
         ['title'=>'The Cockpit !! (P.O.S)', 'desc'=>'Akses panel kasir utama yang dirancang untuk memproses transaksi penjualan ritel dengan cepat dan akurat. Fitur ini mencatat mutasi kas harian, manajemen shift operator, hingga pencetakan struk.', 'link'=>'admin.php?page=puri-cockpit-pos', 'icon'=>'circle-dollar-sign'],
         ['title'=>'Daftar Pelanggan', 'desc'=>'Kelola basis data pelanggan secara terorganisir mulai dari informasi kontak hingga riwayat interaksi bisnis. Data ini digunakan untuk personalisasi faktur dan mempermudah pencarian saat transaksi.', 'link'=>'edit.php?post_type=pr_customer', 'icon'=>'users'],
-        ['title'=>'Mster Item SKU', 'desc'=>'Daftar lengkap item barang dan jasa beserta informasi harga serta kategori pajaknya. Anda dapat mengatur spesifikasi produk, satuan unit, dan menetapkan harga jual yang kompetitif.', 'link'=>'edit.php?post_type=pr_item', 'icon'=>'package', 'badge' => ($stats['low_stock'] > 0) ? $stats['low_stock'] . ' Alert' : ''],
+        ['title'=>'Master Item SKU', 'desc'=>'Daftar lengkap item barang dan jasa beserta informasi harga serta kategori pajaknya. Anda dapat mengatur spesifikasi produk, satuan unit, dan menetapkan harga jual yang kompetitif.', 'link'=>'edit.php?post_type=pr_item', 'icon'=>'package', 'badge' => ($stats['low_stock'] > 0) ? $stats['low_stock'] . ' Alert' : ''],
     ]);
 }
 
