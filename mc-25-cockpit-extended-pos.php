@@ -16,8 +16,9 @@ defined('ABSPATH') || exit;
 
 class Puri_Cockpit_POS {
 
+
     public function __construct() {
-        add_action('admin_menu', [$this, 'register_menu']);
+//        add_action('admin_menu', [$this, 'register_menu']);
         add_action('admin_enqueue_scripts', [$this, 'enqueue_assets']);
         
         // AJAX Endpoints
@@ -26,16 +27,19 @@ class Puri_Cockpit_POS {
         add_action('wp_ajax_puri_pos_checkout', [$this, 'ajax_process_checkout']);
     }
 
+
+/*
     public function register_menu() {
         add_submenu_page(
-            'puri-transaksi',  
+            'puri-sales',  
             'Cockpit POS',
             '🛒 Cockpit POS',  
             'manage_options', 
             'puri-cockpit-pos',
-            [$this, 'render_page']
+            [$this, 'cockpit_render_page']
         );
     }
+*/
 
     public function enqueue_assets($hook) {
         if (strpos($hook, 'puri-cockpit-pos') === false) return;
@@ -46,7 +50,7 @@ class Puri_Cockpit_POS {
         wp_enqueue_style('fontawesome', 'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css');
     }
 
-    public function render_page() {
+    public function cockpit_render_page() {
         $items = $this->get_items_for_dropdown(); 
         $customers = $this->get_customers_for_dropdown();
         $is_finance_or_admin = current_user_can('manage_options'); 
@@ -206,7 +210,7 @@ class Puri_Cockpit_POS {
             .text-red { color: #d63638; } .text-blue { color: #2271b1; font-weight: bold; }
             .text-green { color: #059669; }
 
-            .col-left-input { flex: 0 0 380px; } .col-right-cart { flex: 1; min-width: 400px; } 
+            .col-left-input { flex: 1 0; min-width:calc(50% - 15px) } .col-right-cart { flex: 1; min-width: 400px; } 
             .col-history { flex: 4; } .col-stock { flex: 8; }
 
             .panel { background: #fff; border: 1px solid #c3c4c7; box-shadow: 0 1px 2px rgba(0,0,0,.05); border-radius: 6px; display: flex; flex-direction: column; height: 100%; }
@@ -737,3 +741,19 @@ jQuery(document).ready(function($) {
 }
 
 new Puri_Cockpit_POS();
+
+
+// Inisialisasi class sekali
+$puri_cockpit_pos = new Puri_Cockpit_POS();
+
+// Wrapper global agar kompatibel dengan menu di mc-00
+if (!function_exists('cockpit_render_page')) {
+    function cockpit_render_page() {
+        global $puri_cockpit_pos;
+        if ($puri_cockpit_pos instanceof Puri_Cockpit_POS) {
+            $puri_cockpit_pos->cockpit_render_page();
+        } else {
+            echo '<div class="wrap"><h1>Error</h1><p>Class Puri_Cockpit_POS belum diinisialisasi.</p></div>';
+        }
+    }
+}

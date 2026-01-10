@@ -44,10 +44,66 @@ add_action('init', function() {
 add_action('admin_menu', function() {
     global $menu;
     // Separator untuk memisahkan menu Pusat Riyal dari menu default WP
-    $menu[29] = ['', 'read', 'separator-puri', '', 'wp-menu-separator'];
+    $menu[29] = ['*', 'read', 'separator-puri', '', 'wp-menu-separator'];
+    $menu[34] = ['*', 'read', 'separator-puri', '', 'wp-menu-separator'];
 
+    // DASBOR
+    add_menu_page('Dasbor', 'Dasbor', 'manage_options', 'puri-dashboard', 'puri_render_welcome_screen', 'dashicons-dashboard', 30);
+    add_submenu_page('puri-dashboard', 'Home', '🏠 Home', 'manage_options', 'puri-dashboard', 'puri_render_welcome_screen');
+    add_submenu_page('puri-dashboard', 'Monitoring', '🖥️ Monitoring', 'manage_options', 'puri-monitoring', 'puri_render_monitoring_page');
+
+    // PEMBELIAN
+    add_menu_page('Pembelian', 'Pembelian', 'manage_options', 'puri-purchase', 'puri_landing_purchase', 'dashicons-store', 31);
+    add_submenu_page('puri-purchase', 'Kulakan/procurement', '▼ Pembeilan/Kulakan', 'manage_options', 'puri-procurement', 'puri_render_procurement_page');
+    add_submenu_page('puri-purchase', 'Tagihan', '▼ Tagihan', 'manage_options', 'puri-expenses', 'puri_render_expense_page');
+    add_submenu_page('puri-purchase', 'Pemasok', '▼ Pemasok', 'manage_options', 'edit.php?post_type=pr_vendor');
+    add_submenu_page('puri-purchase', 'Konsinyasi', '▼ Konsinyasi', 'manage_options', 'puri-consignment', 'puri_render_consignment_page');
+
+    // PENJUALAN & PEMBAYARAN
+    add_menu_page('Penjualan & Pembayaran', 'Penjualan', 'manage_options', 'puri-sales', 'puri_landing_sales', 'dashicons-cart', 31);
+	add_submenu_page('puri-sales', 'Cockpit POS', '▶ Cockpit POS !', 'manage_options', 'puri-cockpit-pos', 'cockpit_render_page');
+    //add_submenu_page('puri-sales', 'Kasir POS', '▶ Kasir POS', 'manage_options', 'puri-pos', 'puri_render_pos_page');
+    //add_submenu_page('puri-sales', 'Antrean / Estimasi', '▶ Estimasi', 'manage_options', 'puri-queue', 'puri_render_queue_page');
+    add_submenu_page('puri-sales', 'Pelanggan', '▶ Pelanggan', 'manage_options', 'edit.php?post_type=pr_customer');
+
+    // AKUNTANSI
+    add_menu_page('Akuntansi', 'Akuntansi', 'manage_options', 'puri-accounting', 'puri_landing_accounting', 'dashicons-analytics', 32);
+    add_submenu_page('puri-accounting', 'Transfer Laci', '◕ Transfer Laci', 'manage_options', 'puri-stock-transfer', 'puri_render_transfer_page');
+	add_submenu_page('puri-accounting', 'Jurnal Umum', '◕ Jurnal Umum', 'manage_options', 'puri-manual-journal', 'puri_render_manual_journal_page');
+	add_submenu_page('puri-accounting', 'Stock Opname', '◕ Stock Opname', 'puri_can_rekonsiliasi', 'puri-stock-adj', 'puri_render_stock_adjustment_page');
+    add_submenu_page('puri-accounting', 'Chart of Accounts', '◕ CoA Manager', 'manage_options', 'puri-coa', 'puri_render_coa_manager_page');
+	add_submenu_page('puri-accounting', 'Pemetaan akun General Ledger', '◕ Pemetaan akun GL', 'manage_options', 'puri-gl-mapping', 'puri_render_gl_mapping_page');
+//    add_submenu_page('puri-accounting', 'Rekonsiliasi', '◕ Rekonsiliasi', 'manage_options', 'puri-balance-sheet', 'puri_render_balance_sheet_page');
+
+    // REPORTIN
+    add_menu_page('Laporan', 'Laporan', 'manage_options', 'puri-reporting', 'puri_landing_report', 'dashicons-analytics', 32);
+    add_submenu_page('puri-reporting', 'Mutasi Riyal', '◕ Mutasi Riyal', 'manage_options', 'puri-riyal-report', 'puri_render_riyal_mutation_report');
+    add_submenu_page('puri-reporting', 'Summary Transaksi Customer', '◕ Summary Cust', 'manage_options', 'puri-pivot-report', 'puri_render_pivot_report_page');
+    add_submenu_page('puri-reporting', 'Summary Transaksi Harian', '◕ Transaksi Harian', 'manage_options', 'puri-journal', 'puri_render_journal_page');
+    add_submenu_page('puri-reporting', 'Laba / Rugi', '◕ Laba / Rugi', 'manage_options', 'puri-pl-report', 'puri_render_pl_page');
+    add_submenu_page('puri-reporting', 'Neraca', '◕ Neraca', 'manage_options', 'puri-balance-sheet', 'puri_render_balance_sheet_page');
+	add_submenu_page('puri-reporting', 'Jurnal Stok', '◕ Jurnal Stok', 'manage_options', 'puri-inventory-ledger', 'puri_render_inventory_ledger_page');
+
+
+    // PERBANKAN
+    add_menu_page('Perbankan', 'Perbankan', 'manage_options', 'puri-banking', 'puri_render_profile_page_dummy', 'dashicons-bank', 33);
+    add_submenu_page('puri-banking', 'Akun Terhubung', '■ Integrasi Excel', 'manage_options', 'puri-webhook', 'puri_render_webhook_page');
+
+    // SETTING (non-transaksional)
+    add_menu_page('Setting', 'Setting', 'manage_options', 'puri-setting', 'puri_render_maintenance_page', 'dashicons-admin-settings', 33);
+    add_submenu_page('puri-setting', 'Profile', '◬ Profile', 'manage_options', 'puri-profile', 'puri_render_profile_page_dummy');
+    add_submenu_page('puri-setting', 'Master Item SKU', '◬ Produk & Jasa', 'manage_options', 'edit.php?post_type=pr_item');
+    add_submenu_page('puri-setting', 'Maintenance', '◬️ Maintenance', 'manage_options', 'puri-maintenance', 'puri_render_maintenance_page');
+    add_submenu_page('puri-setting', 'Mass Sync SKU', '◬ Mass Sync SKU', 'manage_options', 'puri-mass-sync', 'puri_render_mass_sync_page');
+
+
+
+
+
+
+/*
     // PILAR 1: MASTER & TOOLS
-    add_menu_page('Master & Tools', 'Master & Tools', 'manage_options', 'puri-master', 'puri_render_welcome_screen', 'dashicons-admin-generic', 30);
+    add_menu_page('Master & Tools', 'Master & Tools', 'manage_options', 'puri-master', 'puri_render_welcome_screen', 'dashicons-admin-generic', 35);
     add_submenu_page('puri-master', 'Home', '🏠 Home', 'manage_options', 'puri-master', 'puri_render_welcome_screen');
     add_submenu_page('puri-master', 'Master SKU', '📋 Master SKU', 'manage_options', 'edit.php?post_type=pr_item');
     add_submenu_page('puri-master', 'Supplier', '🏢 Master Supplier', 'manage_options', 'edit.php?post_type=pr_vendor');
@@ -58,7 +114,7 @@ add_action('admin_menu', function() {
     add_submenu_page('puri-master', 'Maintenance', '⚙️ Maintenance', 'manage_options', 'puri-maintenance', 'puri_render_maintenance_page');
 
     // PILAR 2: TRANSAKSI
-    add_menu_page('Transaksi', 'Transaksi', 'manage_options', 'puri-transaksi', 'puri_render_pos_page', 'dashicons-cart', 31);
+    add_menu_page('Transaksi', 'Transaksi', 'manage_options', 'puri-transaksi', 'puri_render_pos_page', 'dashicons-cart', 36);
     add_submenu_page('puri-transaksi', 'Kasir POS', '💰 Kasir POS', 'manage_options', 'puri-pos', 'puri_render_pos_page');
     add_submenu_page('puri-transaksi', 'Antrean', '📋 Antrean', 'manage_options', 'puri-queue', 'puri_render_queue_page');
     add_submenu_page('puri-transaksi', 'Transfer Laci', '🚚 Transfer Laci', 'manage_options', 'puri-stock-transfer', 'puri_render_transfer_page');
@@ -66,19 +122,25 @@ add_action('admin_menu', function() {
     add_submenu_page('puri-transaksi', 'Konsinyasi', '🤝 Konsinyasi', 'manage_options', 'puri-consignment', 'puri_render_consignment_page');
 
     // PILAR 3: REPORT MUTASI
-    add_menu_page('Report Mutasi', 'Report Mutasi', 'manage_options', 'puri-reports', 'puri_render_riyal_mutation_report', 'dashicons-chart-area', 32);
+    add_menu_page('Report Mutasi', 'Report Mutasi', 'manage_options', 'puri-reports', 'puri_render_riyal_mutation_report', 'dashicons-chart-area', 36);
     add_submenu_page('puri-reports', 'Mutasi Riyal', '📜 Mutasi Riyal', 'manage_options', 'puri-riyal-report', 'puri_render_riyal_mutation_report');
     add_submenu_page('puri-reports', 'Jurnal Stok', '📦 Jurnal Stok', 'manage_options', 'puri-inventory-ledger', 'puri_render_inventory_ledger_page');
     add_submenu_page('puri-reports', 'Pivot Sales', '📊 Pivot Sales', 'manage_options', 'puri-pivot-report', 'puri_render_pivot_report_page'); // [MC 22]
 
     // PILAR 4: LAPORAN KEUANGAN
-    add_menu_page('Laporan Keuangan', 'Laporan Keu', 'manage_options', 'puri-finance', 'puri_render_balance_sheet_page', 'dashicons-analytics', 33);
+    add_menu_page('Laporan Keuangan', 'Laporan Keu', 'manage_options', 'puri-finance', 'puri_render_balance_sheet_page', 'dashicons-analytics', 36);
     add_submenu_page('puri-finance', 'Input Biaya', '💸 Input Biaya', 'manage_options', 'puri-expenses', 'puri_render_expense_page');
     add_submenu_page('puri-finance', 'Jurnal Umum', '📖 Jurnal Umum', 'manage_options', 'puri-journal', 'puri_render_journal_page');
     add_submenu_page('puri-finance', 'Laba / Rugi', '📈 Laba / Rugi', 'manage_options', 'puri-pl-report', 'puri_render_pl_page');
     add_submenu_page('puri-finance', 'Neraca & Kas', '⚖️ Neraca & Kas', 'manage_options', 'puri-balance-sheet', 'puri_render_balance_sheet_page');
     add_submenu_page('puri-finance', 'Monitoring', '🖥️ Monitoring', 'manage_options', 'puri-monitoring', 'puri_render_monitoring_page');
+*/
+
 }, 1);
+
+
+
+
 
 // --- WELCOME SCREEN ---
 function puri_render_welcome_screen() {

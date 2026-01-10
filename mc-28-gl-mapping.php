@@ -15,6 +15,7 @@
 defined('ABSPATH') || exit;
 
 // 1. REGISTRASI MENU (Di Bawah Menu MASTER / Admin Hub)
+/*
 add_action('admin_menu', function() {
     add_submenu_page(
         'puri-master',         // Parent: Master Data
@@ -25,6 +26,7 @@ add_action('admin_menu', function() {
         'puri_render_gl_mapping_page'
     );
 });
+*/
 
 // 2. HELPER FUNCTION (GLOBAL)
 // Fungsi ini yang akan dipanggil oleh modul POS, Adjustment, dll.
