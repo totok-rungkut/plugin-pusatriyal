@@ -154,6 +154,7 @@ function puri_render_profile_page() {
         </form>
     </div>
 
+
     <script>
 	
     jQuery(document).ready(function($){
@@ -342,6 +343,42 @@ add_action('admin_head', function() {
             border-color: var(--puri-accent) !important;
             box-shadow: 0 0 0 1px var(--puri-accent) !important;
         }
+		
+		
+		/* Styling Tabel Master SKU */
+.column-sku_code { width: 110px; }
+.column-item_type { width: 90px; }
+.column-denom, .column-stock { width: 100px; text-align: right !important; }
+.column-avg_buy { width: 150px; text-align: right !important; }
+
+.puri-sku-tag {
+    background: #f1f5f9;
+    color: #475569;
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-family: 'Monaco', 'Lucida Console', 'Consolas', monospace;
+    font-size: 12px;
+    border: 1px solid #e2e8f0;
+}
+
+.puri-badge {
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 10px;
+    font-weight: 700;
+}
+.puri-badge-blue { background: #dbeafe; color: #1e40af; }
+.puri-badge-gray { background: #f3f4f6; color: #374151; }
+
+.puri-price-avg {
+    color: #059669;
+    font-weight: 700;
+    font-family: 'Lucida Console', 'Courier New', monospace;
+}
+		
+		
+		
+		
     </style>
     <?php
 });

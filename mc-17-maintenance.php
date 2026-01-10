@@ -143,3 +143,32 @@ function puri_render_maintenance_page() {
     </div>
     <?php
 }
+
+/**
+ * PURI Integrity Check - Mendeteksi ketidaksinkronan data
+ * untuk nanti ditampilkan di modul mc-00:
+ *
+ * -->     $status = puri_get_integrity_status();
+ *
+ * @return array Status integritas data
+ */
+ 
+function puri_get_integrity_status() {
+    global $wpdb;
+    
+    // 1. Hitung di WordPress (CPT pr_item)
+    $wp_count = wp_count_posts('pr_item')->publish;
+    
+    // 2. Hitung di SQL Master (puri_pr_master_items)
+    $table_items = puri_table_name('T_ITEMS');
+    $sql_count = $wpdb->get_var("SELECT COUNT(*) FROM $table_items");
+    
+    $is_synced = (intval($wp_count) === intval($sql_count));
+    
+    return [
+        'is_synced' => $is_synced,
+        'wp_count'  => $wp_count,
+        'sql_count' => $sql_count,
+        'diff'      => abs($wp_count - $sql_count)
+    ];
+}

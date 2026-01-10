@@ -196,3 +196,36 @@ add_action('admin_init', function() {
         });
     }
 });
+
+
+/** ------------------------------------------------------------------------/
+ * Sync-Guard Notification
+ * notifikasi : perlu dilakukan syncronisasi massal ... tombol mass sync
+ *
+ *   $status = puri_get_integrity_status();  <-- mc-17
+ *
+ *-------------------------------------------------------------------------*/
+ 
+ 
+add_action('admin_notices', function() {
+    // Hanya munculkan di halaman PURI agar tidak mengganggu area lain
+    $screen = get_current_screen();
+    if ( strpos($screen->id, 'puri') === false ) return;
+
+    $status = puri_get_integrity_status();
+
+    if (!$status['is_synced']) {
+        ?>
+        <div class="notice notice-warning is-dismissible puri-notice">
+            <p>
+                <strong>⚠️ PURI Data Mismatch:</strong> Ditemukan perbedaan data antara Master SKU (<?php echo $status['wp_count']; ?>) 
+                dan Database Mesin (<?php echo $status['sql_count']; ?>). 
+                <a href="<?php echo admin_url('admin.php?page=puri-maintenance'); ?>" style="font-weight:bold; color:#d63638; text-decoration:underline;">
+                    Lakukan Mass Sync Sekarang
+                </a>
+            </p>
+        </div>
+        <?php
+    }
+});
+

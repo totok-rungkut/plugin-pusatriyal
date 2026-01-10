@@ -1,0 +1,194 @@
+<?php
+/**
+ * MC 02 - Data Model: Master SKU (Full Professional Refactor)
+ * Version: 6.2.0
+ * * SAFEGUARD PRINCIPLE:
+ * - Mempertahankan SEMUA meta names legacy: item_sku_code, type, denom_value, sell_rate, item_image, package_contents.
+ * - Menambah UI modern dengan Tabs dan CSS.
+ */
+
+defined('ABSPATH') || exit;
+
+// --- 1. PENGATURAN KOLOM ADMIN (LIST VIEW) ---
+add_filter('manage_pr_item_posts_columns', function($columns) {
+    return [
+        'cb'        => $columns['cb'],
+        'sku_code'  => 'Kode SKU',
+        'title'     => 'Nama Item',
+        'item_type' => 'Tipe',
+        'denom'     => 'Denom',
+        'stock'     => 'Stok',
+        'price'     => 'Harga / HPP',
+    ];
+});
+
+add_action('manage_pr_item_posts_custom_column', function($column, $post_id) {
+    global $wpdb;
+    switch ($column) {
+        case 'sku_code':
+            $sku = get_post_meta($post_id, 'item_sku_code', true);
+            echo '<code class="puri-sku-tag">' . esc_html($sku ?: '-') . '</code>';
+            break;
+
+        case 'item_type':
+            $type = get_field('type', $post_id);
+            $labels = ['currency' => 'Valas', 'goods' => 'Retail', 'package' => 'Paket'];
+            $label = $labels[$type] ?? $type;
+            $class = ($type === 'currency') ? 'blue' : (($type === 'package') ? 'purple' : 'gray');
+            echo "<span class='puri-badge $class'>" . strtoupper($label) . "</span>";
+            break;
+
+        case 'denom':
+            $denom = get_field('denom_value', $post_id);
+            echo ($denom > 0) ? "<strong>" . number_format($denom) . "</strong>" : "<span style='color:#ccc'>-</span>";
+            break;
+
+        case 'stock':
+            $table = (defined('T_STOCK')) ? puri_table_name('T_STOCK') : $wpdb->prefix . 'puri_inventory_balance';
+            $qty = $wpdb->get_var($wpdb->prepare("SELECT qty_balance FROM $table WHERE item_id = %d", $post_id));
+            echo "<strong>" . number_format($qty ?: 0) . "</strong>";
+            break;
+
+        case 'price':
+            $sell = get_field('sell_rate', $post_id);
+            $avg = get_post_meta($post_id, 'base_price', true);
+            echo "<div style='font-size:11px;'>";
+            echo "Jual: <span style='color:#2563eb; font-weight:700;'>" . number_format($sell ?: 0) . "</span><br>";
+            echo "HPP: <span style='color:#059669;'>" . number_format($avg ?: 0) . "</span>";
+            echo "</div>";
+            break;
+    }
+}, 10, 2);
+
+// --- 2. REFACTOR ENTRY FORM (ACF TABS) ---
+add_action('acf/init', function() {
+    if(!function_exists('acf_add_local_field_group')) return;
+
+    acf_add_local_field_group(array(
+        'key' => 'group_puri_item_detail_v620',
+        'title' => '📦 Manajemen Master SKU',
+        'fields' => array(
+            // TAB 1: IDENTITAS & MEDIA
+            array('key' => 't_identitas', 'label' => 'Identitas & Media', 'type' => 'tab'),
+            array(
+                'key' => 'f_item_sku',
+                'label' => 'Kode SKU',
+                'name' => 'item_sku_code',
+                'type' => 'text',
+                'required' => 1,
+                'wrapper' => array('width' => '50'),
+                'instructions' => 'Unik, tanpa spasi.',
+            ),
+            array(
+                'key' => 'f_item_type',
+                'label' => 'Tipe Item',
+                'name' => 'type',
+                'type' => 'select',
+                'choices' => array(
+                    'currency' => 'Valas (Currency)',
+                    'goods'    => 'Barang Retail',
+                    'package'  => 'Paket Bundling'
+                ),
+                'wrapper' => array('width' => '50'),
+            ),
+            array(
+                'key' => 'f_item_desc',
+                'label' => 'Description',
+                'name' => 'description',
+                'type' => 'textarea',
+                'rows' => 2,
+            ),
+            array(
+                'key' => 'f_item_img',
+                'label' => 'Foto Visual',
+                'name' => 'item_image', // FITUR LEGACY RESTORED
+                'type' => 'image',
+                'return_format' => 'url',
+                'instructions' => 'Ditampilkan di katalog atau struk digital.',
+            ),
+
+            // TAB 2: FINANCIALS
+            array('key' => 't_pricing', 'label' => 'Harga & Denom', 'type' => 'tab'),
+            array(
+                'key' => 'f_item_denom',
+                'label' => 'Nilai Denom',
+                'name' => 'denom_value',
+                'type' => 'number',
+                'default_value' => 1,
+                'conditional_logic' => array(array(array('field' => 'f_item_type', 'operator' => '==', 'value' => 'currency'))),
+                'wrapper' => array('width' => '33'),
+            ),
+            array(
+                'key' => 'f_item_rate',
+                'label' => 'Harga Jual (Rate)',
+                'name' => 'sell_rate',
+                'type' => 'number',
+                'wrapper' => array('width' => '33'),
+            ),
+            array(
+                'key' => 'f_base_price_readonly',
+                'label' => 'HPP Average',
+                'name' => 'base_price',
+                'type' => 'number',
+                'readonly' => 1,
+                'wrapper' => array('width' => '34'),
+                'instructions' => 'Dihitung otomatis Engine.',
+            ),
+
+            // TAB 3: BUNDLING RECIPIE
+            array('key' => 't_bundling', 'label' => 'Komposisi Paket', 'type' => 'tab', 
+                  'conditional_logic' => array(array(array('field' => 'f_item_type', 'operator' => '==', 'value' => 'package')))),
+            array(
+                'key' => 'f_bundle_mode',
+                'label' => 'Metode Harga Paket',
+                'name' => 'bundle_pricing_mode',
+                'type' => 'select',
+                'choices' => array('flat' => 'Flat IDR', 'dynamic' => 'Dinamis (Sum)'),
+            ),
+            array(
+                'key' => 'f_item_pkg',
+                'label' => 'Resep Bundling',
+                'name' => 'package_contents',
+                'type' => 'repeater',
+                'layout' => 'table',
+                'button_label' => 'Tambah Komponen',
+                'sub_fields' => array(
+                    array('key' => 'p_item_id', 'label' => 'Item', 'name' => 'p_item_ref', 'type' => 'post_object', 'post_type' => array('pr_item'), 'return_format' => 'id'),
+                    array('key' => 'p_item_qty', 'label' => 'Qty', 'name' => 'p_qty', 'type' => 'number', 'default_value' => 1),
+                ),
+            ),
+        ),
+        'location' => array(array(array('param' => 'post_type', 'operator' => '==', 'value' => 'pr_item'))),
+        'style' => 'default',
+        'label_placement' => 'top',
+    ));
+});
+
+// --- 3. SANITASI DATA (LEGACY LOGIC PROTECTOR) ---
+add_action('acf/save_post', function($post_id) {
+    if (get_post_type($post_id) !== 'pr_item') return;
+
+    // Sanitasi Denom
+    $type = get_field('type', $post_id);
+    $denom = get_field('denom_value', $post_id);
+    if ($type !== 'currency') {
+        update_field('denom_value', 1, $post_id);
+    } else {
+        update_field('denom_value', max(1, intval($denom)), $post_id);
+    }
+
+    // Sanitasi Sell Rate
+    $rate = get_field('sell_rate', $post_id);
+    update_field('sell_rate', max(0, floatval($rate)), $post_id);
+
+    // Sanitasi Resep Bundling
+    $package = get_field('package_contents', $post_id);
+    if (is_array($package)) {
+        foreach ($package as $idx => $row) {
+            if (isset($row['p_qty'])) {
+                $package[$idx]['p_qty'] = max(1, intval($row['p_qty']));
+            }
+        }
+        update_field('package_contents', $package, $post_id);
+    }
+}, 20);
