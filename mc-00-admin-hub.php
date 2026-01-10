@@ -53,18 +53,18 @@ add_action('admin_menu', function() {
     add_submenu_page('puri-dashboard', 'Monitoring', '🖥️ Monitoring', 'manage_options', 'puri-monitoring', 'puri_render_monitoring_page');
 
     // PEMBELIAN
-    add_menu_page('Pembelian', 'Pembelian', 'manage_options', 'puri-purchase', 'puri_landing_purchase', 'dashicons-store', 31);
-    add_submenu_page('puri-purchase', 'Kulakan/procurement', '▼ Pembeilan/Kulakan', 'manage_options', 'puri-procurement', 'puri_render_procurement_page');
-    add_submenu_page('puri-purchase', 'Tagihan', '▼ Tagihan', 'manage_options', 'puri-expenses', 'puri_render_expense_page');
-    add_submenu_page('puri-purchase', 'Pemasok', '▼ Pemasok', 'manage_options', 'edit.php?post_type=pr_vendor');
-    add_submenu_page('puri-purchase', 'Konsinyasi', '▼ Konsinyasi', 'manage_options', 'puri-consignment', 'puri_render_consignment_page');
+    add_menu_page('Pembelian', 'Pembelian', 'manage_options', 'puri-purchase', 'puri_landing_purchase', 'dashicons-cart', 31);
+    add_submenu_page('puri-purchase', 'Kulakan/procurement', 'Pembeilan/Kulakan', 'manage_options', 'puri-procurement', 'puri_render_procurement_page');
+    add_submenu_page('puri-purchase', 'Tagihan', 'Tagihan', 'manage_options', 'puri-expenses', 'puri_render_expense_page');
+    add_submenu_page('puri-purchase', 'Pemasok', 'Pemasok', 'manage_options', 'edit.php?post_type=pr_vendor');
 
     // PENJUALAN & PEMBAYARAN
-    add_menu_page('Penjualan & Pembayaran', 'Penjualan', 'manage_options', 'puri-sales', 'puri_landing_sales', 'dashicons-cart', 31);
-	add_submenu_page('puri-sales', 'Cockpit POS', '▶ Cockpit POS !', 'manage_options', 'puri-cockpit-pos', 'cockpit_render_page');
-    //add_submenu_page('puri-sales', 'Kasir POS', '▶ Kasir POS', 'manage_options', 'puri-pos', 'puri_render_pos_page');
+    add_menu_page('Penjualan & Pembayaran', 'Sales', 'manage_options', 'puri-sales', 'puri_landing_sales', 'dashicons-store', 31);
+	add_submenu_page('puri-sales', 'Cockpit POS', 'Cockpit POS !', 'manage_options', 'puri-cockpit-pos', 'cockpit_render_page');
+    add_submenu_page('puri-purchase', 'Konsinyasi', 'Konsinyasi', 'manage_options', 'puri-consignment', 'puri_render_consignment_page');
+    //add_submenu_page('puri-sales', 'Kasir POS', 'Kasir POS', 'manage_options', 'puri-pos', 'puri_render_pos_page');
     //add_submenu_page('puri-sales', 'Antrean / Estimasi', '▶ Estimasi', 'manage_options', 'puri-queue', 'puri_render_queue_page');
-    add_submenu_page('puri-sales', 'Pelanggan', '▶ Pelanggan', 'manage_options', 'edit.php?post_type=pr_customer');
+    add_submenu_page('puri-sales', 'Pelanggan', 'Pelanggan', 'manage_options', 'edit.php?post_type=pr_customer');
 
     // AKUNTANSI
     add_menu_page('Akuntansi', 'Akuntansi', 'manage_options', 'puri-accounting', 'puri_landing_accounting', 'dashicons-analytics', 32);
@@ -90,7 +90,7 @@ add_action('admin_menu', function() {
     add_submenu_page('puri-banking', 'Akun Terhubung', '■ Integrasi Excel', 'manage_options', 'puri-webhook', 'puri_render_webhook_page');
 
     // SETTING (non-transaksional)
-    add_menu_page('Setting', 'Setting', 'manage_options', 'puri-setting', 'puri_render_maintenance_page', 'dashicons-admin-settings', 33);
+    add_menu_page('Setting', 'Setting/Master', 'manage_options', 'puri-setting', 'puri_render_maintenance_page', 'dashicons-admin-settings', 33);
     add_submenu_page('puri-setting', 'Profile', '◬ Profile', 'manage_options', 'puri-profile', 'puri_render_profile_page');
     add_submenu_page('puri-setting', 'Master Item SKU', '◬ Produk & Jasa', 'manage_options', 'edit.php?post_type=pr_item');
     add_submenu_page('puri-setting', 'Maintenance', '◬️ Maintenance', 'manage_options', 'puri-maintenance', 'puri_render_maintenance_page');
@@ -229,3 +229,18 @@ add_action('admin_notices', function() {
     }
 });
 
+
+/************** NOTE *****
+
+Catatan berikut jangan dihapus walaupun di-REFACTOR: 
+
+mc13 : puri_render_data_io_page - Maintenance - Import/Export
+mc15 : puri_render_invoice_page - Cetak Invoice
+mc17 : puri_render_data_io_page - Maintenance - Import/Export
+mc23 : puri_render_coa_manager_page - Chart of Accounts
+mc25 : cockpit_render_page - Cockpit POS
+mc26 : puri_render_stock_adjustment_page - Stock Opname
+mc27 : puri_render_manual_journal_page - Jurnal Umum
+mc28 : puri_render_gl_mapping_page - Pengaturan Akun GL
+
+************************************************************/
