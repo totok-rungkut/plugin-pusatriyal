@@ -29,6 +29,13 @@ if (!defined('T_JOURNAL')) define('T_JOURNAL', 'puri_acct_journal');
 if (!defined('T_CONSIGN')) define('T_CONSIGN', 'puri_inventory_consign'); // untuk mc-09
 if (!defined('T_LOCKS'))   define('T_LOCKS',   'puri_inventory_locks'); 
 if (!defined('T_ORDERS'))  define('T_ORDERS',  'puri_orders'); // untuk mc-07
+// ============================================================================
+// POOL TRANSACTION TABLES (v6.10.25 - Phase 1)
+// ============================================================================
+if (!defined('T_POOL_TRANSACTIONS')) define('T_POOL_TRANSACTIONS', 'puri_pool_transactions');
+if (!defined('T_POOL_STOCK'))        define('T_POOL_STOCK',        'puri_pool_stock');
+if (!defined('T_POOL_JOURNAL'))      define('T_POOL_JOURNAL',      'puri_pool_journal'); // Optional: untuk complex transactions
+if (!defined('T_EOD_BATCHES'))       define('T_EOD_BATCHES',       'puri_pool_eod_batches');
 
 // Ensure puri_table_name helper exists (from mc-00) fallback
 if (!function_exists('puri_table_name')) {
@@ -43,6 +50,8 @@ if (!function_exists('puri_table_name')) {
 
 // ACF Options Page: Profile & Bank (guarded)
 add_action('acf/init', function() {
+/*
+
     if (!function_exists('acf_add_options_page')) {
         // ACF not active; admin notice will be shown elsewhere
         return;
@@ -80,12 +89,14 @@ add_action('acf/init', function() {
         ],
         'location' => [[['param'=>'options_page', 'operator'=>'==', 'value'=>'puri-profile']]],
     ]);
+*/	
 });
 
 /**
  * Render Profile page dummy (guard for ACF)
  * Keamanan: only for manage_options
  */
+ /*
 function puri_render_profile_page_dummy() {
     puri_check_cap('manage_options');
     echo '<div class="wrap"><h1>🏨 Profil Perusahaan & Bank</h1>';
@@ -97,6 +108,9 @@ function puri_render_profile_page_dummy() {
     }
     echo '</div>';
 }
+*/
+
+
 
 /**
  * DB Installer v6.0.1
@@ -154,6 +168,7 @@ function puri_core_db_install() {
         location_id varchar(50) NOT NULL,
         item_id bigint(20) NOT NULL,
         qty_change decimal(19,4) DEFAULT 0,
+        trx_type varchar(20) DEFAULT 'sell',
         ref_id varchar(50) NOT NULL,
         description text,
         PRIMARY KEY (id)
@@ -164,6 +179,8 @@ function puri_core_db_install() {
         location_id varchar(50) NOT NULL,
         item_id bigint(20) NOT NULL,
         qty decimal(19,4) DEFAULT 0,
+        cost_avg decimal(19,4) DEFAULT 0,
+		last_updated datetime DEFAULT NULL,
         PRIMARY KEY (id),
         UNIQUE KEY loc_item (location_id, item_id)
     ) $collate;";
@@ -182,6 +199,99 @@ function puri_core_db_install() {
         type varchar(20),
         is_cash tinyint(1)
     ) $collate;";
+
+
+/**
+ * ============================================================================
+ * POOL TRANSACTION TABLES (v6.10.25)
+ * ============================================================================
+ */
+
+// 1. POOL TRANSACTIONS: Main staging table
+$pool_transactions_table = puri_table_name('T_POOL_TRANSACTIONS');
+$sql_pool_transactions = "CREATE TABLE IF NOT EXISTS {$pool_transactions_table} (
+    id bigint(20) NOT NULL AUTO_INCREMENT,
+    ref_id varchar(50) NOT NULL,
+    trx_date datetime NOT NULL,
+    trade_mode enum('sell','buy') NOT NULL DEFAULT 'sell',
+    customer_id bigint(20) NOT NULL,
+    customer_name varchar(255) DEFAULT NULL,
+    customer_nik varchar(50) DEFAULT NULL,
+    payment_method varchar(20) DEFAULT 'cash',
+    delivery_method varchar(20) DEFAULT 'pickup',
+    total_riyal decimal(19,4) DEFAULT 0,
+    total_idr decimal(19,4) DEFAULT 0,
+    total_hpp decimal(19,4) DEFAULT 0,
+    items_snapshot longtext DEFAULT NULL,
+    status enum('pending','verified','posted','void') DEFAULT 'pending',
+    verified_by bigint(20) DEFAULT NULL,
+    verified_at datetime DEFAULT NULL,
+    posted_by bigint(20) DEFAULT NULL,
+    posted_at datetime DEFAULT NULL,
+    created_by bigint(20) NOT NULL,
+    created_at datetime DEFAULT CURRENT_TIMESTAMP,
+    notes text DEFAULT NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY ref_id (ref_id),
+    KEY idx_trx_date (trx_date),
+    KEY idx_status (status),
+    KEY idx_customer_id (customer_id)
+) $collate;";
+
+// 2. POOL STOCK: Shadow stock movements
+$pool_stock_table = puri_table_name('T_POOL_STOCK');
+$sql_pool_stock = "CREATE TABLE IF NOT EXISTS {$pool_stock_table} (
+    id bigint(20) NOT NULL AUTO_INCREMENT,
+    ref_id varchar(50) NOT NULL,
+    item_id bigint(20) NOT NULL,
+    location_id varchar(50) NOT NULL,
+    qty_change decimal(19,4) NOT NULL,
+    created_at datetime DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    KEY idx_ref_id (ref_id),
+    KEY idx_item_location (item_id, location_id)
+) $collate;";
+
+// 3. POOL JOURNAL: Staged GL entries (optional, untuk kompleks accounting)
+$pool_journal_table = puri_table_name('T_POOL_JOURNAL');
+$sql_pool_journal = "CREATE TABLE IF NOT EXISTS {$pool_journal_table} (
+    id bigint(20) NOT NULL AUTO_INCREMENT,
+    ref_id varchar(50) NOT NULL,
+    account_code varchar(20) NOT NULL,
+    debit decimal(19,4) DEFAULT 0,
+    credit decimal(19,4) DEFAULT 0,
+    description text DEFAULT NULL,
+    created_at datetime DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    KEY idx_ref_id (ref_id),
+    KEY idx_account (account_code)
+) $collate;";
+
+// 4. EOD BATCHES: End of Day tracking
+$eod_batches_table = puri_table_name('T_EOD_BATCHES');
+$sql_eod_batches = "CREATE TABLE IF NOT EXISTS {$eod_batches_table} (
+    id bigint(20) NOT NULL AUTO_INCREMENT,
+    batch_date date NOT NULL,
+    total_transactions int DEFAULT 0,
+    total_riyal decimal(19,4) DEFAULT 0,
+    total_idr decimal(19,4) DEFAULT 0,
+    stock_opname_status enum('pending','verified','discrepancy') DEFAULT 'pending',
+    reconciliation_status enum('pending','matched','unmatched') DEFAULT 'pending',
+    posting_status enum('pending','posted','failed') DEFAULT 'pending',
+    posted_by bigint(20) DEFAULT NULL,
+    posted_at datetime DEFAULT NULL,
+    notes text DEFAULT NULL,
+    created_at datetime DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE KEY batch_date (batch_date),
+    KEY idx_posting_status (posting_status)
+) $collate;";
+
+// Run dbDelta for Pool Tables
+dbDelta($sql_pool_transactions);
+dbDelta($sql_pool_stock);
+dbDelta($sql_pool_journal);
+dbDelta($sql_eod_batches);
 
     // Run dbDelta for all
     dbDelta($sql_items);

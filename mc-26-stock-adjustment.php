@@ -21,6 +21,7 @@
 defined('ABSPATH') || exit;
 
 // Registrasi Menu
+/*
 add_action('admin_menu', function() {
     add_submenu_page(
         'puri-transaksi',
@@ -31,7 +32,7 @@ add_action('admin_menu', function() {
         'puri_render_stock_adjustment_page'
     );
 });
-
+*/
 // Handler Submit
 add_action('admin_post_puri_submit_adjustment', 'puri_handle_adjustment_submit');
 

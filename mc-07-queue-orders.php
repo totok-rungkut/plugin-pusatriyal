@@ -105,6 +105,13 @@ function puri_submit_booking_handler() {
         wp_send_json_error(['message' => 'Invalid booking payload']);
     }
 
+foreach ($payload['cart'] as &$item) {
+    if (!empty($item['id'])) {
+        $item['wp_post_id'] = intval($item['id']); // CPT ID dari frontend
+    }
+}
+
+
     $cust_name = sanitize_text_field($payload['name']);
     $cust_phone = sanitize_text_field($payload['phone'] ?? '');
     $items_json = wp_json_encode($payload['cart']);
