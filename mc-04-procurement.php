@@ -15,7 +15,21 @@ function puri_render_procurement_page() {
     $items_table = puri_table_name('T_ITEMS');
     $items = $wpdb->get_results("SELECT id, wp_post_id, sku, name, denom_value FROM {$items_table} WHERE type = 'currency' ORDER BY denom_value ASC");
     $vendors = get_posts(['post_type' => 'pr_vendor', 'posts_per_page' => -1, 'post_status' => 'publish']);
-    $banks = $wpdb->get_results("SELECT code, name FROM " . puri_table_name('T_CHART') . " WHERE is_cash = 1 ORDER BY code ASC");
+    //$banks = $wpdb->get_results("SELECT code, name FROM " . puri_table_name('T_CHART') . " WHERE is_cash = 1 ORDER BY code ASC");
+// PATCH: Ambil Nama dan Saldo Akhir akun Kas/Bank
+$banks = $wpdb->get_results("
+SELECT 
+        c.code, 
+        c.name, 
+        ROUND(
+            COALESCE(c.balance, 0) + 
+            COALESCE((SELECT SUM(debit - credit) FROM " . puri_table_name('T_JOURNAL') . " WHERE account_code = c.code), 0), 
+            2
+        ) as live_balance
+    FROM " . puri_table_name('T_CHART') . " c 
+    WHERE c.is_cash = 1 
+    ORDER BY c.code ASC
+");
 
     if (isset($_GET['puri_procure_ok'])) echo '<div class="notice notice-success"><p>✅ ' . esc_html(urldecode($_GET['puri_procure_ok'])) . '</p></div>';
     ?>
@@ -36,6 +50,17 @@ function puri_render_procurement_page() {
 		.proc-row select { text-align: left; }
         .proc-row .readonly { background: #f1f5f9; color: #475569; font-weight: bold; }
         .btn-submit { width: 100%; padding: 15px; background: #059669; color: #fff; border: none; border-radius: 6px; font-weight: 900; cursor: pointer; }
+		
+.parent {display:flex;flex-direction:column;min-height:99%; gap:4px;}
+.parent h3 {height:40px;margin:0;font-size:28px;text-align:center;}
+.pay_info_box {height:30px;padding:10px; background:#f0f9ff;}
+.info_saldo_box {padding:10px; min-height:30px; border-top:2px solid #999; background: #fcf8f4; padding-top: 15px;}
+.content_wrap {flex:1 1 auto;min-height:0;display:grid;grid-template-rows:auto 1fr auto;}
+.payment_row {padding:10px;background:#bfb;overflow-y:auto;min-height:0;}
+.btn_wrap {display:flex;padding-top:10px;justify-content:center;align-items:flex-start;}
+.btn_wrap button {min-width:200px;}
+
+		
     </style>
 
     <div class="wrap">
@@ -82,10 +107,25 @@ function puri_render_procurement_page() {
                 </div>
 
                 <div class="proc-panel">
+				<div class="parent">
                     <h3>Pembayaran</h3>
+					
+					<div id="pay_info_box" >
+					   <div id="info_diff" style="font-weight: bold; margin-top: 5px; color: #e11d48;">KURANG: Rp 0</div>
+					</div>					
+					
+    <div class="content_wrap">
                     <div id="payment_rows"></div>
+		<div class="btn_wrap">			
                     <button type="button" id="btn_add_payment" class="button" style="width:100%">+ Tambah Bayar</button>
+		</div>			
+   </div>
+					
+					<div class="info_saldo_box" >
+						<div id="info_balance">Pilih akun untuk lihat saldo...</div>
+					</div>
                 </div>
+				</div>
             </div>
         </form>
         
@@ -108,17 +148,42 @@ function puri_render_procurement_page() {
         const items = <?php echo wp_json_encode($items); ?>;
         const banks = <?php echo wp_json_encode($banks); ?>;
         let mode = 'nominal', rIdx = 0, pIdx = 0;
-        const fmt = (n) => new Intl.NumberFormat('id-ID').format(Math.round(n || 0));
+ //       const fmt = (n) => new Intl.NumberFormat('id-ID').format(Math.round(n || 0));
+ 
+ // Menggunakan maximumFractionDigits: 2 agar konsisten untuk mata uang
+const fmt = (n) => new Intl.NumberFormat('id-ID', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2
+}).format(n || 0);
+ 
         const cln = (v) => parseFloat(String(v).replace(/\./g, '').replace(',', '.') || 0);
 
-        function updateTotals() {
-            let bel = 0; document.querySelectorAll('.item-row .col-idr-val').forEach(i => bel += cln(i.value));
-            let bay = 0; document.querySelectorAll('.pay-amt').forEach(i => bay += cln(i.value));
-            document.getElementById('total_pembelian').textContent = 'Rp ' + fmt(bel);
-            const isKlop = Math.abs(bay - bel) < 1 && bel > 0;
-            document.getElementById('btn_submit').disabled = !(isKlop && document.getElementById('vendor_id_hidden').value && document.getElementById('confirm_data').checked);
-        }
+function updateTotals() {
+	let bel = 0; document.querySelectorAll('.item-row .col-idr-val').forEach(i => bel += cln(i.value));
+	let bay = 0; document.querySelectorAll('.pay-amt').forEach(i => bay += cln(i.value));
+	
+	document.getElementById('total_pembelian').textContent = 'Rp ' + fmt(bel);
+	
+	// Hitung Selisih
+	let diff = bel - bay;
+	const infoDiff = document.getElementById('info_diff');
+	
+	if (diff === 0 && bel > 0) {
+		infoDiff.textContent = '✅ STATUS: KLOP';
+		infoDiff.style.color = '#059669';
+	} else {
+		infoDiff.textContent = (diff > 0 ? 'KURANG: Rp ' : 'LEBIH: Rp ') + fmt(Math.abs(diff));
+		infoDiff.style.color = '#e11d48';
+	}
 
+	// Validasi 3 Syarat Submit
+	const hasVendor = document.getElementById('vendor_id_hidden').value !== '';
+	const isKlop = (Math.abs(diff) < 1 && bel > 0);
+	const isConfirmed = document.getElementById('confirm_data').checked;
+
+	document.getElementById('btn_submit').disabled = !(hasVendor && isKlop && isConfirmed);
+}
+		
         function buildRow() {
             const idx = rIdx++;
             const row = document.createElement('div');
@@ -196,17 +261,41 @@ row.innerHTML = `
 		
 		
         document.getElementById('vendor_listbox').onchange = function() { document.getElementById('vendor_id_hidden').value = this.value; updateTotals(); };
-        document.getElementById('btn_add_payment').onclick = function() {
-            const idx = pIdx++;
-            const div = document.createElement('div');
-            div.style = "display:grid; grid-template-columns: 1fr 120px 30px; gap:5px; margin-bottom:8px;";
-            div.innerHTML = `<select name="payments[${idx}][account]" required>${banks.map(b=>`<option value="${b.code}">${b.name}</option>`).join('')}</select>
-                             <input type="text" name="payments[${idx}][amount]" class="pay-amt">
-                             <button type="button" class="btn-remove">×</button>`;
-            div.querySelector('.pay-amt').oninput = function() { this.value = fmt(cln(this.value)); updateTotals(); };
-            div.querySelector('.btn-remove').onclick = () => { div.remove(); updateTotals(); };
-            document.getElementById('payment_rows').appendChild(div);
-        };
+
+document.getElementById('btn_add_payment').onclick = function() {
+	const idx = pIdx++;
+	const div = document.createElement('div');
+	div.style = "display:grid; grid-template-columns: 1fr 120px 30px; gap:5px; margin-bottom:8px;";
+
+	// Masukkan data saldo ke dalam atribut data-balance
+	div.innerHTML = `
+		<select name="payments[${idx}][account]" class="pay-acc" required>
+			<option value="" data-bal="0">-- Pilih Kas/Bank --</option>
+${banks.map(b => `<option value="${b.code}" data-bal="${b.live_balance || 0}">${b.name}</option>`).join('')}
+		</select>
+		<input type="text" name="payments[${idx}][amount]" class="pay-amt" placeholder="Rp 0">
+		<button type="button" class="btn-remove">×</button>`;
+
+	const sel = div.querySelector('.pay-acc');
+	const amt = div.querySelector('.pay-amt');
+
+	// Event saat pilih Akun (Tampilkan Saldo)
+	sel.onchange = function() {
+		const opt = this.selectedOptions[0];
+		const bal = cln(opt.dataset.bal);
+		document.getElementById('info_balance').innerHTML = `Saldo <b>${opt.text}</b>: <span style="color:${bal < 0 ? 'red' : 'green'}">Rp ${fmt(bal)}</span>`;
+		updateTotals();
+	};
+
+	amt.oninput = function() { this.value = fmt(cln(this.value)); updateTotals(); };
+	div.querySelector('.btn-remove').onclick = () => { div.remove(); updateTotals(); };
+
+	document.getElementById('payment_rows').appendChild(div);
+	updateTotals();
+};
+
+
+
         document.getElementById('btn_add_row').onclick = buildRow;
         document.getElementById('confirm_data').onchange = updateTotals;
         buildRow();
