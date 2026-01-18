@@ -27,7 +27,7 @@ if (!class_exists('PURI_Inventory_Ledger_V7')) {
                 'item_id'     => $p['item_id'],
                 'location_id' => $location, // Tambahan: Agar kartu stok per gudang akurat
                 'qty_change'  => floatval($p['qty']),
-                'ref_no'      => $p['ref_no'],
+                'ref_id'      => $p['ref_id'],
                 'description' => $p['description'] ?? 'System Movement',
                 'created_at'  => current_time('mysql'),
                 'user_id'     => get_current_user_id()

@@ -1,14 +1,31 @@
 <?php
 /**
  * MC-03C - ACCOUNTING JOURNAL SPECIALIST (MOZART COMPATIBLE)
- * @version 7.2.0
+ * @version 7.4.0 (Standardized ref_id)
  * Responsibilities:
  * - Menentukan pemetaan akun GL (Chart of Accounts)
- * - Eksekusi Double-Entry (Debit/Kredit) ke T_JOURNAL
- * - Mendukung multi-channel payment (Kas, Bank, atau Hutang)
+ * - Eksekusi Double-Entry (Debit/Kredit) ke T_JOURNAL (puri_journal_entries)
+ * - Helper function untuk insert journal guna mencegah Fatal Error
  */
 
 defined('ABSPATH') || exit;
+
+/**
+ * HELPER: Menjamin fungsi insert journal selalu tersedia untuk Mozart
+ */
+if (!function_exists('puri_insert_journal')) {
+    function puri_insert_journal($date, $ref_id, $acc, $debit, $credit, $desc) {
+        global $wpdb;
+        return $wpdb->insert(puri_table_name('T_JOURNAL'), [
+            'trx_date'     => $date,
+            'ref_id'       => $ref_id, // Standar DB: ref_id
+            'account_code' => $acc,
+            'debit'        => $debit,
+            'credit'       => $credit,
+            'description'  => $desc
+        ]);
+    }
+}
 
 if (!class_exists('PURI_Accounting_Journal_V7')) {
     class PURI_Accounting_Journal_V7 {
@@ -20,43 +37,37 @@ if (!class_exists('PURI_Accounting_Journal_V7')) {
             // Hitung total nilai transaksi (Qty x Harga)
             $amount = abs($p['qty'] * ($p['unit_price'] ?? 0));
             
-            // Abaikan jika nilai 0 (mencegah sampah di jurnal)
-            if ($amount <= 0) return;
+            // Keamanan: Abaikan jika nilai 0 atau data referensi tidak ada
+            if ($amount <= 0 || empty($p['ref_id'])) return;
 
-            $inventory_acc = puri_gl('inventory'); // Default: 1401 (Persediaan)
+            $inventory_acc = puri_gl('inventory'); // Default: 1401
             $target_acc    = '';
 
             switch ($action) {
-                // Skenario 1: Opname via Investigasi (Gantung di Suspense)
                 case 'adjustment_indirect': 
                     $target_acc = puri_gl('suspense'); 
                     break;
                 
-                // Skenario 2: Opname Langsung (Masuk ke Pendapatan/Beban Selisih)
                 case 'adjustment_direct':   
                     $target_acc = ($p['qty'] > 0) ? puri_gl('opname_gain') : puri_gl('opname_loss'); 
                     break;
                 
-                // Skenario 3: Procurement (Kulakan dari Vendor)
                 case 'procurement':         
-                    // Cek apakah ada kiriman akun pembayaran spesifik (Kas/Bank)
-                    // Jika tidak ada, default ke Hutang Dagang (AP Trade)
-                    $target_acc = isset($p['payment_account']) ? $p['payment_account'] : puri_gl('ap_trade'); 
+                    $target_acc = $p['payment_account'] ?? puri_gl('ap_trade'); 
                     break;
                 
-                // Skenario 4: Penjualan/Buyback di POS
-                case 'sales':               
+                case 'sales':                
                 case 'buyback':
-                    $target_acc = puri_gl('cogs'); // Lawannya adalah Harga Pokok Penjualan
+                    $target_acc = puri_gl('cogs');
                     break;
 
                 default: 
-                    throw new Exception("Mapping GL tidak ditemukan untuk aksi: " . $action);
+                    throw new Exception("Mozart Journal Error: Mapping GL tidak ditemukan untuk aksi: " . $action);
             }
 
-            // EKSEKUSI JURNAL (Baris yang Anda cari)
+            // EKSEKUSI JURNAL (Standar ref_id)
             $this->commit_double_entry(
-                $p['ref_no'], 
+                $p['ref_id'], 
                 $inventory_acc, 
                 $target_acc, 
                 $amount, 
@@ -66,55 +77,41 @@ if (!class_exists('PURI_Accounting_Journal_V7')) {
         }
 
         /**
-         * Reversal Logic (Untuk pembatalan transaksi)
+         * Reversal Logic (Untuk pembatalan transaksi dari Investigasi)
          */
         public function post_reversal($p) {
-            $date = current_time('mysql');
-            $amount = abs($p['amount']);
+            $date     = current_time('mysql');
+            $amount   = abs($p['amount']);
             $suspense = puri_gl('suspense');
             $real_acc = ($p['is_gain']) ? puri_gl('opname_gain') : puri_gl('opname_loss');
-            $ref_rev = "REV-" . $p['original_ref'];
-            $desc = "[REVERSAL] " . ($p['description'] ?? "Koreksi Investigasi");
+            
+            // Konsistensi: Selalu gunakan ref_id
+            $ref_id   = "REV-" . ($p['ref_id'] ?? 'UNKNOWN');
+            $desc     = "[REVERSAL] " . ($p['description'] ?? "Koreksi Investigasi");
 
             if ($p['is_gain']) {
-                puri_insert_journal($date, $ref_rev, $suspense, $amount, 0, $desc);
-                puri_insert_journal($date, $ref_rev, $real_acc, 0, $amount, $desc);
+                puri_insert_journal($date, $ref_id, $suspense, $amount, 0, $desc);
+                puri_insert_journal($date, $ref_id, $real_acc, 0, $amount, $desc);
             } else {
-                puri_insert_journal($date, $ref_rev, $real_acc, $amount, 0, $desc);
-                puri_insert_journal($date, $ref_rev, $suspense, 0, $amount, $desc);
+                puri_insert_journal($date, $ref_id, $real_acc, $amount, 0, $desc);
+                puri_insert_journal($date, $ref_id, $suspense, 0, $amount, $desc);
             }
         }
 
         /**
          * THE DOUBLE ENTRY EXECUTOR
-         * Logika Debit/Kredit otomatis berdasarkan tanda Qty (+/-)
          */
-        private function commit_double_entry($ref, $inv_acc, $target_acc, $val, $qty, $desc) {
+        private function commit_double_entry($ref_id, $inv_acc, $target_acc, $val, $qty, $desc) {
             $date = current_time('mysql');
             
-            /**
-             * ATURAN MAIN:
-             * Jika Qty Positif (Barang Masuk / Kulakan):
-             * - DEBIT  : Persediaan (Aset bertambah)
-             * - KREDIT : Kas/Hutang/Lawan (Aset berkurang/Kewajiban bertambah)
-             */
             if ($qty > 0) {
-                // Debit Inventory
-                puri_insert_journal($date, $ref, $inv_acc, $val, 0, $desc);
-                // Kredit Lawannya
-                puri_insert_journal($date, $ref, $target_acc, 0, $val, $desc);
-            } 
-            
-            /**
-             * Jika Qty Negatif (Barang Keluar / Penjualan):
-             * - DEBIT  : Lawan/COGS (Biaya bertambah)
-             * - KREDIT : Persediaan (Aset berkurang)
-             */
-            else {
-                // Debit Lawannya (HPP)
-                puri_insert_journal($date, $ref, $target_acc, $val, 0, $desc);
-                // Kredit Inventory
-                puri_insert_journal($date, $ref, $inv_acc, 0, $val, $desc);
+                // Barang Masuk: Persediaan (D), Kas/Hutang (K)
+                puri_insert_journal($date, $ref_id, $inv_acc, $val, 0, $desc);
+                puri_insert_journal($date, $ref_id, $target_acc, 0, $val, $desc);
+            } else {
+                // Barang Keluar: HPP (D), Persediaan (K)
+                puri_insert_journal($date, $ref_id, $target_acc, $val, 0, $desc);
+                puri_insert_journal($date, $ref_id, $inv_acc, 0, $val, $desc);
             }
         }
     }

@@ -1,7 +1,7 @@
 <?php
 /**
  * MC 04 - PROCUREMENT HUB (STABLE HYBRID - PATCH 7.3.9)
- * UI/UX: 7.3.11 | Processor: Mozart Core
+ * UI/UX: 7.3.12 | Processor: Mozart Core
  * Fix: Database Column & Missing Function Journal
  */
 
@@ -60,6 +60,10 @@ SELECT
 .btn_wrap {display:flex;padding-top:10px;justify-content:center;align-items:flex-start;}
 .btn_wrap button {min-width:200px;}
 
+.pay-warning { color: #e11d48; font-weight: bold; font-size: 11px; margin-top: 2px; display: block; }
+.input-error { border: 2px solid #e11d48 !important; background-color: #fff1f2 !important; }
+
+.proc-tab.disabled { opacity: 0.5; cursor: not-allowed; pointer-events: none; background: #e2e8f0; color: #94a3b8; }
 		
     </style>
 
@@ -143,11 +147,22 @@ SELECT
         </div>
     </div>
 
-    <script>
+
+
+
+
+<script>
+
     (function() {
         const items = <?php echo wp_json_encode($items); ?>;
         const banks = <?php echo wp_json_encode($banks); ?>;
         let mode = 'nominal', rIdx = 0, pIdx = 0;
+		
+		
+// --- Patch: Reset Tab State saat Init Sesi Baru ---
+    const startTabs = [document.getElementById('tab_nominal'), document.getElementById('tab_qty')];
+    startTabs.forEach(t => { if(t) t.classList.remove('disabled'); });		
+		
  //       const fmt = (n) => new Intl.NumberFormat('id-ID').format(Math.round(n || 0));
  
  // Menggunakan maximumFractionDigits: 2 agar konsisten untuk mata uang
@@ -159,30 +174,59 @@ const fmt = (n) => new Intl.NumberFormat('id-ID', {
         const cln = (v) => parseFloat(String(v).replace(/\./g, '').replace(',', '.') || 0);
 
 function updateTotals() {
-	let bel = 0; document.querySelectorAll('.item-row .col-idr-val').forEach(i => bel += cln(i.value));
-	let bay = 0; document.querySelectorAll('.pay-amt').forEach(i => bay += cln(i.value));
-	
-	document.getElementById('total_pembelian').textContent = 'Rp ' + fmt(bel);
-	
-	// Hitung Selisih
-	let diff = bel - bay;
-	const infoDiff = document.getElementById('info_diff');
-	
-	if (diff === 0 && bel > 0) {
-		infoDiff.textContent = '✅ STATUS: KLOP';
-		infoDiff.style.color = '#059669';
-	} else {
-		infoDiff.textContent = (diff > 0 ? 'KURANG: Rp ' : 'LEBIH: Rp ') + fmt(Math.abs(diff));
-		infoDiff.style.color = '#e11d48';
-	}
+            let bel = 0; document.querySelectorAll('.item-row .col-idr-val').forEach(i => bel += cln(i.value));
+            let bay = 0; 
 
-	// Validasi 3 Syarat Submit
-	const hasVendor = document.getElementById('vendor_id_hidden').value !== '';
-	const isKlop = (Math.abs(diff) < 1 && bel > 0);
-	const isConfirmed = document.getElementById('confirm_data').checked;
+            document.querySelectorAll('#payment_rows > div').forEach(row => {
+                const sel = row.querySelector('.pay-acc');
+                const amtInput = row.querySelector('.pay-amt');
+                const amtVal = cln(amtInput.value);
+                const balLimit = cln(sel.selectedOptions[0]?.dataset.bal || 0);
+                
+                bay += amtVal;
 
-	document.getElementById('btn_submit').disabled = !(hasVendor && isKlop && isConfirmed);
-}
+                // Tampilkan Warning tapi tidak blokir input
+                const warningId = 'warn-' + sel.name;
+                let warnEl = row.querySelector('.pay-warning');
+                
+                if (sel.value && amtVal > balLimit) {
+                    amtInput.style.backgroundColor = '#fff7ed'; // Warna orange tipis (warning)
+                    if (!warnEl) {
+                        warnEl = document.createElement('span');
+                        warnEl.className = 'pay-warning';
+                        warnEl.style.color = '#f59e0b'; // Warna Orange (Warning), bukan merah error
+                        row.appendChild(warnEl);
+                    }
+                    warnEl.textContent = '⚠️ Saldo kurang (Modal talangan)';
+                } else {
+                    amtInput.style.backgroundColor = '';
+                    if (warnEl) warnEl.remove();
+                }
+            });
+
+            document.getElementById('total_pembelian').textContent = 'Rp ' + fmt(bel);
+            
+            let diff = bel - bay;
+            const infoDiff = document.getElementById('info_diff');
+            
+            if (Math.abs(diff) < 1 && bel > 0) {
+                infoDiff.textContent = '✅ STATUS: KLOP';
+                infoDiff.style.color = '#059669';
+            } else {
+                infoDiff.textContent = (diff > 0 ? 'KURANG: Rp ' : 'LEBIH: Rp ') + fmt(Math.abs(diff));
+                infoDiff.style.color = '#e11d48';
+            }
+
+            // KEMBALI KE SYARAT AWAL (Tanpa blokir saldo)
+            const hasVendor = document.getElementById('vendor_id_hidden').value !== '';
+            const isKlop = (Math.abs(diff) < 1 && bel > 0);
+            const isConfirmed = document.getElementById('confirm_data').checked;
+
+            document.getElementById('btn_submit').disabled = !(hasVendor && isKlop && isConfirmed);
+			
+			updateModeLock();
+			
+        }
 		
         function buildRow() {
             const idx = rIdx++;
@@ -217,11 +261,38 @@ row.innerHTML = `
 
             [sar, ks, qty].forEach(el => el.oninput = function() { if(el !== ks) this.value = fmt(cln(this.value)); sync(); });
             sel.onchange = sync;
-            row.querySelector('.btn-remove').onclick = () => { row.remove(); updateTotals(); };
+            row.querySelector('.btn-remove').onclick = () => { row.remove(); updateTotals(); updateModeLock(); };
             document.getElementById('proc_rows').appendChild(row);
             if(mode === 'quantity') { sar.readOnly = true; sar.classList.add('readonly'); qty.readOnly = false; qty.classList.remove('readonly'); row.querySelector('.c2').style.order=4; row.querySelector('.c4').style.order=2; }
             else { sar.readOnly = false; sar.classList.remove('readonly'); qty.readOnly = true; qty.classList.add('readonly'); row.querySelector('.c2').style.order=2; row.querySelector('.c4').style.order=4; }
         }
+
+// PATCH: Fungsi untuk mengunci/membuka Tab Mode
+function updateModeLock() {
+    const rows = document.querySelectorAll('.item-row');
+    
+    // Logic: Jika tidak ada baris, hasData otomatis false
+    const hasData = Array.from(rows).some(row => {
+        const sel = row.querySelector('select').value;
+        const valas = cln(row.querySelector('.sar-in').value);
+        const qty = cln(row.querySelector('.qty-in').value);
+        return sel !== "" || valas > 0 || qty > 0;
+    });
+
+    const tabs = [document.getElementById('tab_nominal'), document.getElementById('tab_qty')];
+    
+    // Patch: Jika tidak ada baris, pastikan semua disabled dihapus
+    if (rows.length === 0 || !hasData) {
+        tabs.forEach(t => {
+            if(t) t.classList.remove('disabled');
+        });
+    } else {
+        tabs.forEach(t => {
+            if(t && !t.classList.contains('active')) t.classList.add('disabled');
+        });
+    }
+}
+
 
         // document.getElementById('tab_nominal').onclick = function() { mode = 'nominal'; this.classList.add('active'); document.getElementById('tab_qty').classList.remove('active'); document.getElementById('proc_mode').value='nominal'; document.getElementById('proc_rows').innerHTML=''; buildRow(); };
         // document.getElementById('tab_qty').onclick = function() { mode = 'quantity'; this.classList.add('active'); document.getElementById('tab_nominal').classList.remove('active'); document.getElementById('proc_mode').value='quantity'; document.getElementById('proc_rows').innerHTML=''; buildRow(); };
@@ -310,51 +381,88 @@ ${banks.map(b => `<option value="${b.code}" data-bal="${b.live_balance || 0}">${
 add_action('admin_post_puri_procure_submit', function() {
     check_admin_referer('puri_procure_action', 'puri_procure_nonce');
     global $wpdb;
+
     $wpdb->query('START TRANSACTION');
     try {
         $ref = 'PRO-' . strtoupper(wp_generate_password(6, false));
         $items = $_POST['items'] ?? [];
         $pays = $_POST['payments'] ?? [];
         $vendor_id = intval($_POST['vendor_id']);
-        
+        $v_name = get_the_title($vendor_id) ?: 'Vendor #'.$vendor_id;
+
+        $total_idr = 0;
+        $items_desc_list = [];
+
         foreach ($items as $it) {
             $qty = floatval(str_replace('.', '', $it['qty']));
             $kurs = floatval(str_replace('.', '', $it['kurs']));
             $sar = floatval(str_replace('.', '', $it['total_riyal']));
+            
             if ($qty <= 0) continue;
 
             $sql_id = puri_get_item_sql_id($it['id']);
             $it_info = $wpdb->get_row($wpdb->prepare("SELECT sku, denom_value FROM " . puri_table_name('T_ITEMS') . " WHERE id = %d", $sql_id));
 
-            // SNAPSHOT & JURNAL (MENGGANTI puri_insert_journal YANG MISSING)
-            $snap = json_encode(['mode'=>$_POST['mode'], 'denom'=>$it_info->denom_value, 'kurs_beli'=>$kurs, 'total_valas'=>$sar, 'qty_lbr'=>$qty, 'vendor_id'=>$vendor_id]);
-            
-            // 1. Debit Persediaan
-            $wpdb->insert(puri_table_name('T_JOURNAL'), [
-                'trx_date' => current_time('mysql'), 'ref_id' => $ref, 'account_code' => '1103001', // Sesuaikan kode persediaan Anda
-                'debit' => $sar * $kurs, 'credit' => 0, 'description' => "Procurement {$it_info->sku} | Snap: {$snap}"
+            if (!$it_info) throw new Exception("Item dengan ID {$it['id']} tidak ditemukan.");
+
+            $subtotal = $sar * $kurs;
+            $total_idr += $subtotal;
+
+            // Simpan deskripsi untuk jurnal gabungan di akhir
+            $items_desc_list[] = sprintf('%s (%s riyal @%s)', 
+                $it_info->sku, 
+                number_format($sar, 0, ',', '.'), 
+                number_format($kurs, 0, ',', '.')
+            );
+
+            /**
+             * EKSEKUSI MOZART (MC-03)
+             * Mozart akan otomatis:
+             * 1. Update Stock di T_STOCK via mc-03b
+             * 2. Hitung Moving Average (HPP) via mc-03b
+             * 3. Catat Kartu Stok di T_LEDGER via mc-03a
+             * 4. Catat Jurnal DEBIT (1401) via mc-03c
+             */
+            $res = puri_mozart()->execute('procurement', [
+                'item_id'     => $sql_id,
+                'qty'         => $qty,
+                'unit_price'  => $kurs, // Digunakan Mozart untuk hitung Moving Average
+                'ref_id'      => $ref,
+                'location_id' => 'gudang_utama',
+                'description' => "Kulakan dari {$v_name} | {$it_info->sku} @{$kurs}"
             ]);
 
-            // 2. Update HPP di Master (Hanya base_price, tanpa stock_qty karena error kolom)
-            $wpdb->update(puri_table_name('T_ITEMS'), ['base_price' => $kurs], ['id' => $sql_id]);
+            if (is_wp_error($res)) throw new Exception("Mozart Error: " . $res->get_error_message());
         }
 
-        // 3. Kredit Pembayaran
+        // 2. JURNAL PEMBAYARAN (KREDIT)
+        // Gabungkan rincian item ke dalam deskripsi pembayaran agar informatif
+        $full_journal_desc = "Pembayaran Kulakan {$v_name} : " . implode(' ; ', $items_desc_list);
+
         foreach ($pays as $p) {
             $amt = floatval(str_replace('.', '', $p['amount']));
             if ($amt > 0) {
+                // Kita masukkan sisi kredit secara manual karena Mozart fokus pada inventory per-item
                 $wpdb->insert(puri_table_name('T_JOURNAL'), [
-                    'trx_date' => current_time('mysql'), 'ref_id' => $ref, 'account_code' => $p['account'],
-                    'debit' => 0, 'credit' => $amt, 'description' => "Payment Procurement {$ref}"
+                    'trx_date'     => current_time('mysql'),
+                    'ref_id'       => $ref,
+                    'account_code' => sanitize_text_field($p['account']),
+                    'debit'        => 0,
+                    'credit'       => $amt,
+                    'description'  => $full_journal_desc
                 ]);
             }
         }
 
         $wpdb->query('COMMIT');
         wp_redirect(admin_url('admin.php?page=puri-procurement&puri_procure_ok=' . urlencode($ref)));
-    } catch (Exception $e) { $wpdb->query('ROLLBACK'); wp_die($e->getMessage()); }
+    } catch (Exception $e) {
+        $wpdb->query('ROLLBACK');
+        wp_die("Gagal Memproses: " . $e->getMessage());
+    }
     exit;
 });
+
 
 // AUTO-BRIDGE WP_ID TO SQL_ID
 if (!function_exists('puri_get_item_sql_id')) {
