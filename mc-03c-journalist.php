@@ -26,54 +26,80 @@ if (!class_exists('PURI_Accounting_Journal_V7')) {
          * Post to General Ledger
          * Fungsi utama untuk mencatat transaksi ke jurnal.
          */
-        public function post_to_gl($action_type, $params) {
-            global $wpdb;
-            $table_journal = puri_table_name('T_JOURNAL'); // Sinkron MC-01
+public function post_to_gl($action_type, $params) {
+    global $wpdb;
+    $table_journal = puri_table_name('T_JOURNAL');
 
-            // 1. DATA PREPARATION
-            $ref_id      = $params['source_ref']; // Contoh: PRO-20260119-XYZ
-            $total_idr   = floatval($params['total_idr']);
-            $created_by  = $params['created_by'] ?? get_current_user_id();
-            $trx_date    = $params['created_at'] ?? current_time('mysql');
-            $snapshot    = $params['snapshot_json'] ?? null;
+    $ref_id    = $params['source_ref'];
+    $total_idr = floatval($params['total_idr']);
+    $trx_date  = $params['created_at'] ?? current_time('mysql');
+    $user      = get_current_user_id();
+    $desc      = $this->compose_description($action_type, $params);
 
-            // 2. COMPOSER: Merakit Narasi Deskripsi Otomatis
-            $description = $this->compose_description($action_type, $params);
-
-            // 3. POSTING DEBET (Sisi Penerimaan Barang/Biaya)
-            // Mengambil akun 'inventory' secara dinamis dari MC-28
-            $debit_account = ($action_type === 'procurement') ? puri_gl('inventory') : puri_gl('cogs');
-
-            $wpdb->insert($table_journal, [
-                'trx_date'      => $trx_date,
-                'ref_id'        => $ref_id,
-                'account_code'  => $debit_account,
-                'debit'         => $total_idr,
-                'credit'        => 0,
-                'description'   => $description,
-                'snapshot_json' => $snapshot, // Audit Trail hanya di baris pertama
-                'created_by'    => $created_by
-            ]);
-
-            // 4. POSTING KREDIT (Sisi Pembayaran - Cash Based)
-            // Meloop rincian pembayaran dari nampan MC-04
-            if (!empty($params['payments'])) {
-                foreach ($params['payments'] as $pay) {
-                    $wpdb->insert($table_journal, [
-                        'trx_date'      => $trx_date,
-                        'ref_id'        => $ref_id,
-                        'account_code'  => $pay['account_code'], // Akun Kas/Bank pilihan user
-                        'debit'         => 0,
-                        'credit'        => floatval($pay['amount']),
-                        'description'   => $description,
-                        'snapshot_json' => null,
-                        'created_by'    => $created_by
-                    ]);
-                }
-            }
-
-            return true;
+    if ($action_type === 'procurement') {
+        // PAIR A: Aliran Uang (Dr) Biaya | (Cr) Kas/Bank
+        $this->insert_row($wpdb, $table_journal, $trx_date, $ref_id, puri_gl('purchase_cost'), $total_idr, 0, "Biaya: " . $desc, $user);
+        foreach ($params['payments'] as $pay) {
+            $this->insert_row($wpdb, $table_journal, $trx_date, $ref_id, $pay['account_code'], 0, $pay['amount'], "Bayar: " . $ref_id, $user);
         }
+
+        // PAIR B: Aliran Barang (Dr) Persediaan | (Cr) HPP
+        $this->insert_row($wpdb, $table_journal, $trx_date, $ref_id, puri_gl('inventory'), $total_idr, 0, "Masuk Stok: " . $ref_id, $user);
+        $this->insert_row($wpdb, $table_journal, $trx_date, $ref_id, puri_gl('cogs'), 0, $total_idr, "HPP Kontra: " . $ref_id, $user);
+
+    } elseif ($action_type === 'pos_submission') {
+// Kita asumsikan MC-05B mengirimkan 'is_buyback' => true jika kasir membeli barang
+        $is_buyback = $params['is_buyback'] ?? false;
+			if ($is_buyback) {
+				/**
+				 * KASUS: BELI ECERAN (Buyback dari Customer)
+				 * Resep sama dengan Procurement:
+				 * PAIR A: (Dr) Biaya Pembelian | (Cr) Kas/Bank [Uang Keluar]
+				 * PAIR B: (Dr) Persediaan | (Cr) HPP [Barang Masuk]
+				 */
+				$this->insert_row($wpdb, $table_journal, $trx_date, $ref_id, puri_gl('purchase_cost'), $total_idr, 0, "Beli Eceran: " . $desc, $user);
+				foreach ($params['payments'] as $pay) {
+					$this->insert_row($wpdb, $table_journal, $trx_date, $ref_id, $pay['account_code'], 0, $pay['amount'], "Bayar Cust: " . $ref_id, $user);
+				}
+				$this->insert_row($wpdb, $table_journal, $trx_date, $ref_id, puri_gl('inventory'), $total_idr, 0, "Masuk Stok (Ecer): " . $ref_id, $user);
+				$this->insert_row($wpdb, $table_journal, $trx_date, $ref_id, puri_gl('cogs'), 0, $total_idr, "HPP Kontra: " . $ref_id, $user);
+
+			} else {
+				/**
+				 * KASUS: JUAL ECERAN (Normal Sales)
+				 * PAIR A: (Dr) Kas/Bank | (Cr) Sales Retail [Uang Masuk]
+				 * PAIR B: (Dr) HPP | (Cr) Persediaan [Barang Keluar]
+				 */
+				foreach ($params['payments'] as $pay) {
+					$this->insert_row($wpdb, $table_journal, $trx_date, $ref_id, $pay['account_code'], $pay['amount'], 0, "Terima POS: " . $ref_id, $user);
+				}
+				$this->insert_row($wpdb, $table_journal, $trx_date, $ref_id, puri_gl('sales_retail'), 0, $total_idr, "Pendapatan: " . $desc, $user);
+
+				$this->insert_row($wpdb, $table_journal, $trx_date, $ref_id, puri_gl('cogs'), $total_idr, 0, "HPP Jual: " . $ref_id, $user);
+				$this->insert_row($wpdb, $table_journal, $trx_date, $ref_id, puri_gl('inventory'), 0, $total_idr, "Keluar Stok: " . $ref_id, $user);
+			}
+		}
+
+    return true;
+}
+
+/**
+ * Helper untuk menjaga kebersihan baris jurnal
+ */
+private function insert_row($wpdb, $table, $date, $ref, $acc, $dr, $cr, $desc, $user) {
+    $wpdb->insert($table, [
+        'trx_date'     => $date,
+        'ref_id'       => $ref,
+        'account_code' => $acc,
+        'debit'        => $dr,
+        'credit'       => $cr,
+        'description'  => $desc,
+        'created_by'   => $user
+    ]);
+}
+
+
+
 
         /**
          * Private Composer: Meracik teks deskripsi dari nampan

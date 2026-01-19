@@ -1,12 +1,12 @@
 <?php
 /**
  * ============================================================================
- * MC-25 - COCKPIT EXTENDED POINT OF SALE SYSTEM
+ * MC-05 - COCKPIT EXTENDED POINT OF SALE SYSTEM
  * ============================================================================
  * 
  * @package     Puri_Money_Changer
  * @subpackage  Cockpit_POS
- * @version     6.10.30 (UX Restructured - Pool Transaction Phase 1)
+ * @version     6.10.32 (UX Restructured - Pool Transaction Phase 1)
  * @author      Denmas Totok (Architecture & Core Logic)
  * @refactor    Gemini AI Assistant (Code Optimization)
  * @since       2024-01-14
@@ -25,125 +25,8 @@
  * - FIX: JSON Snapshot stored in BOTH debit/credit journal entries
  * - FIX: Recursive JSON decode for mutation history
  * - FIX: Moving average cost calculation on BUY mode
- * 
- * ============================================================================
- * ARCHITECTURE OVERVIEW
- * ============================================================================
- * DESIGN PATTERN: Single Responsibility + AJAX-Driven Interface
- * 
- * Core Components:
- * ┌─────────────────────────────────────────────────────────────────────┐
- * │ 1. CUSTOMER IDENTIFICATION (Panel 1)                                │
- * │    - Trade Mode Selector (Sell/Buy)                                 │
- * │    - Customer Dropdown (Registered Members)                         │
- * │    - Quick Add Customer Modal                                       │
- * │    - Customer Info Display                                          │
- * └─────────────────────────────────────────────────────────────────────┘
- * 
- * ┌─────────────────────────────────────────────────────────────────────┐
- * │ 2. ITEM TRANSACTION INPUT (Panel 2)                                 │
- * │    - Item SKU Dropdown (sorted by denomination)                     │
- * │    - Quantity & Riyal Input                                         │
- * │    - Dynamic Rate Calculation                                       │
- * │    - Stock Validation (Sell mode only)                              │
- * │    - Visual Item Preview                                            │
- * └─────────────────────────────────────────────────────────────────────┘
- * 
- * ┌─────────────────────────────────────────────────────────────────────┐
- * │ 3. SHOPPING CART & CHECKOUT (Panel 3)                               │
- * │    - Cart Items Pool (CRUD ready)                                   │
- * │    - Payment Method Selector (Cash/Transfer/QRIS)                   │
- * │    - Delivery Method (Pickup/Delivery)                              │
- * │    - Grand Total Display                                            │
- * │    - Checkout & Reset Actions                                       │
- * └─────────────────────────────────────────────────────────────────────┘
- * 
- * ┌─────────────────────────────────────────────────────────────────────┐
- * │ 4. DAILY MUTATION HISTORY (Bottom Left - Stable)                    │
- * │    - Real-time transaction log                                      │
- * │    - Riyal & IDR summary                                            │
- * │    - Refresh on demand                                              │
- * └─────────────────────────────────────────────────────────────────────┘
- * 
- * ┌─────────────────────────────────────────────────────────────────────┐
- * │ 5. STOCK CARD SUMMARY (Bottom Right - Stable)                       │
- * │    - Monthly inventory movement                                     │
- * │    - Back-calculation for opening balance                           │
- * │    - Sortable columns                                               │
- * └─────────────────────────────────────────────────────────────────────┘
- * 
- * ============================================================================
- * DATA FLOW
- * ============================================================================
- * 
- * TRANSACTION LIFECYCLE:
- * ┌──────────────┐     ┌─────────────┐     ┌──────────────┐
- * │   Customer   │────>│  Add Items  │────>│  Validation  │
- * │     KYC      │     │   to Cart   │     │  & Checkout  │
- * └──────────────┘     └─────────────┘     └──────────────┘
- *                                                   │
- *                                                   ▼
- *                                          ┌────────────────┐
- *                                          │  Update Stock  │
- *                                          │  Insert Ledger │
- *                                          │ Insert Journal │
- *                                          └────────────────┘
- * 
- * STOCK CALCULATION LOGIC:
- * - SELL Mode: qty_end - qty_out + qty_in = qty_start (backward calc)
- * - BUY Mode:  Moving Average Cost = (old_value + new_value) / total_qty
- * 
- * ============================================================================
- * SINGLE POINT OF TRUTH (SPOT) PRINCIPLES
- * ============================================================================
- * 1. T_STOCK: Authoritative source for current inventory levels
- * 2. T_LEDGER: Immutable transaction history (append-only)
- * 3. T_JOURNAL: Double-entry bookkeeping enforced
- * 4. Snapshot JSON: Embedded in BOTH debit & credit entries for traceability
- * 
- * ============================================================================
- * SECURITY & VALIDATION
- * ============================================================================
- * - AJAX Nonce Verification: All endpoints protected
- * - Stock Locking: FOR UPDATE queries prevent race conditions
- * - Transaction Rollback: Database transactions with try-catch
- * - User Capability Check: manage_options required for critical operations
- * - Rate Editing: Restricted to Finance users + Agent customers only
- * 
- * ============================================================================
- * DEPENDENCIES
- * ============================================================================
- * External Libraries (CDN):
- * - SweetAlert2: User-friendly modal dialogs
- * - Select2: Enhanced dropdown with search
- * - Font Awesome 6.4: Icon library
- * 
- * WordPress Hooks:
- * - admin_enqueue_scripts: Asset loading
- * - wp_ajax_*: AJAX endpoint registration
- * 
- * Custom Functions (Expected):
- * - puri_table_name(): Database table name resolver
- * - puri_gl(): Chart of accounts mapping
- * - puri_insert_journal(): Journal entry creator
- * - puri_get_item_sql_id(): CPT to SQL ID translator
- * 
- * ============================================================================
- * BROWSER COMPATIBILITY
- * ============================================================================
- * - Chrome 90+, Firefox 88+, Safari 14+, Edge 90+
- * - ES6+ JavaScript (Arrow functions, Template literals, Async/Await)
- * - CSS Grid & Flexbox layout
- * 
- * ============================================================================
- * KNOWN LIMITATIONS
- * ============================================================================
- * - Concurrent checkouts: Last-write-wins (no optimistic locking yet)
- * - Image upload size: Limited by php.ini settings
- * - Session timeout: Cart data lost after WordPress session expires
- * 
- * ============================================================================
- */
+ * */
+
 
 defined('ABSPATH') || exit;
 
@@ -157,13 +40,106 @@ class Puri_Cockpit_POS {
         add_action('wp_ajax_puri_pos_get_stock_summary', [$this, 'ajax_get_stock_summary']);
         add_action('wp_ajax_puri_pos_get_daily_mutation', [$this, 'ajax_get_daily_mutation']);
         add_action('wp_ajax_puri_pos_checkout', [$this, 'ajax_process_checkout']);
-        
+        add_action('wp_ajax_puri_pos_get_pool_snapshot', [$this, 'get_pool_snapshot']);
+		add_action('wp_ajax_puri_pos_get_pool_history', [$this, 'get_pool_history']);
+		add_action('wp_ajax_puri_pos_void_pool_transaction', [$this, 'void_pool_transaction']);
+		
         // AJAX Endpoints - Customer Management (NEW v6.10.25)
         add_action('wp_ajax_puri_pos_create_customer', [$this, 'ajax_create_customer']);
 		
 		// ubah nama file menjadi format : KTP_nama-anda_123456.png
 		add_action('wp_ajax_puri_pos_upload_customer_id', [$this, 'ajax_upload_customer_id']);
     }
+
+
+public function get_pool_snapshot() {
+    global $wpdb;
+    check_ajax_referer('puri_pos_checkout', 'nonce'); // Re-use nonce checkout
+
+    $ref_id = sanitize_text_field($_POST['ref_id']);
+    $table  = puri_table_name('T_POOL_TRANSACTIONS');
+
+    $row = $wpdb->get_row($wpdb->prepare(
+        "SELECT * FROM $table WHERE ref_id = %s AND status = 'pending'",
+        $ref_id
+    ));
+
+    if (!$row) {
+        wp_send_json_error('Data tidak ditemukan atau sudah diposting.');
+    }
+
+    // Ambil data customer dari ID yang tersimpan
+    $cust_id = $row->customer_id;
+    // (Optional: Join dengan master customer jika perlu detail lebih)
+
+    wp_send_json_success([
+        'trade_mode' => $row->trade_mode,
+        'cust_id'    => $row->customer_id,
+        'cart'       => json_decode($row->cart_snapshot, true), // Mengembalikan state cart utuh
+        'pay_method' => $row->payment_method
+    ]);
+}
+
+public function void_pool_transaction() {
+        global $wpdb;
+        check_ajax_referer('puri_pos_checkout', 'nonce');
+
+        $ref_id = sanitize_text_field($_POST['ref_id']);
+        
+        $wpdb->query('START TRANSACTION');
+        
+        // 1. Update status di T_POOL_TRANSACTIONS menjadi void
+        $wpdb->update(puri_table_name('T_POOL_TRANSACTIONS'), 
+            ['status' => 'void'], 
+            ['ref_id' => $ref_id]
+        );
+
+        // 2. KEMBALIKAN STOK FISIK (Sangat Penting!)
+        // Cari semua item di T_POOL_STOCK terkait ref_id ini
+        $items = $wpdb->get_results($wpdb->prepare(
+            "SELECT item_id, qty FROM ".puri_table_name('T_POOL_STOCK')." WHERE ref_id = %s",
+            $ref_id
+        ));
+
+        foreach ($items as $item) {
+            // Logika kebalikan: jika dulu jual (minus), sekarang tambah (plus)
+            // Ini memanggil fungsi sync stok internal Anda
+            $this->reverse_physical_stock($item->item_id, $item->qty);
+        }
+
+        $wpdb->query('COMMIT');
+        wp_send_json_success('Transaction voided and stock restored.');
+    }
+	
+public function get_pool_history() {
+    global $wpdb;
+    $table_trans = puri_table_name('T_POOL_TRANSACTIONS');
+    $table_cust  = $wpdb->prefix . "posts"; // Jika customer disimpan di WP Posts
+
+    // Ambil data pending hari ini
+    $results = $wpdb->get_results("
+        SELECT p.*, DATE_FORMAT(p.created_at, '%H:%i') as time 
+        FROM $table_trans p
+        WHERE p.status = 'pending' 
+        ORDER BY p.created_at DESC 
+        LIMIT 20
+    ");
+
+    $data = [];
+    foreach ($results as $r) {
+        $data[] = [
+            'ref_id'       => $r->ref_id,
+            'time'         => $r->time,
+            'trade_mode'   => $r->trade_mode,
+            'customer_name'=> $this->get_customer_name($r->customer_id), // Helper function Anda
+            'total_amount' => $r->total_amount,
+            'status'       => $r->status
+        ];
+    }
+
+    wp_send_json_success($data);
+    wp_die();
+}
 
     /**
      * Enqueue CSS/JS Assets
@@ -235,18 +211,18 @@ public function ajax_upload_customer_id() {
      * 
      * Layout Structure:
      * ┌────────────────────────────────────────────────────────────┐
-     * │ TOP ROW (3 Panels)                                         │
+     * │ TOP ROW (3 Panels)                               │
      * │ ┌────────────┬────────────────┬──────────────────────────┐ │
-     * │ │  Customer  │ Item Selection │   Cart & Checkout        │ │
-     * │ │    KYC     │  Transaction   │   Payment/Delivery       │ │
+     * │ │  Customer  │ Item Selection │   Cart & Checkout  │ │
+     * │ │    KYC     │  Transaction   │   Payment/Delivery │ │
      * │ └────────────┴────────────────┴──────────────────────────┘ │
      * └────────────────────────────────────────────────────────────┘
      * 
      * ┌────────────────────────────────────────────────────────────┐
-     * │ BOTTOM ROW (2 Panels - STABLE)                             │
+     * │ BOTTOM ROW (2 Panels - STABLE)                   │
      * │ ┌───────────────────┬────────────────────────────────────┐ │
-     * │ │ Daily Mutation    │  Stock Card Summary                │ │
-     * │ │ History           │  (Monthly Movement)                │ │
+     * │ │ Daily Mutation    │  Stock Card Summary       │ │
+     * │ │ History           │  (Monthly Movement)       │ │
      * │ └───────────────────┴────────────────────────────────────┘ │
      * └────────────────────────────────────────────────────────────┘
      */
@@ -644,1251 +620,523 @@ public function ajax_upload_customer_id() {
             </div>
         </div>
 
-        <style>
-            /* ============================================ */
-            /* GLOBAL STYLES                              */
-            /* ============================================ */
-            .puri-cockpit-wrapper { 
-                box-sizing: border-box; 
-                padding-top: 10px; 
-            }
-            
-            .version-badge {
-                font-size: 11px;
-                background: #2271b1;
-                color: white;
-                padding: 2px 8px;
-                border-radius: 3px;
-                font-weight: normal;
-                margin-left: 10px;
-            }
+<style>
+		/* ============================================ */
+		/* GLOBAL STYLES                              */
+		/* ============================================ */
+		.puri-cockpit-wrapper { box-sizing: border-box; padding-top: 10px; }
+		.version-badge { font-size: 11px; background: #2271b1; color: white; padding: 2px 8px; border-radius: 3px; font-weight: normal; margin-left: 10px; }
+		.cockpit-container { display: flex; flex-direction: column; gap: 15px; margin-top: 15px; }
+
+		/* ============================================ */
+		/* LAYOUT STRUCTURE                           */
+		/* ============================================ */
+		.flex-row { display: flex; gap: 15px; width: 100%; flex-wrap: wrap; }
+		.flex-col { display: flex; flex-direction: column; gap: 15px; }
+		.top-row .col-customer { flex: 1; min-width: 300px; }
+		.top-row .col-transaction { flex: 1; min-width: 350px; }
+		.top-row .col-cart { flex: 1; min-width: 400px; }
+		.bottom-row .col-history { flex: 3; min-width: 300px; }
+		.bottom-row .col-stock { flex: 7; min-width: 500px; }
+
+		/* ============================================ */
+		/* PANEL COMPONENTS                           */
+		/* ============================================ */
+		.panel { background: #fff; border: 1px solid #c3c4c7; box-shadow: 0 1px 2px rgba(0,0,0,.05); border-radius: 6px; display: flex; flex-direction: column; height: 100%; }
+		.panel-header { background: #f6f7f7; padding: 10px 15px; font-weight: 600; border-bottom: 1px solid #c3c4c7; font-size: 13px; display: flex; justify-content: space-between; align-items: center; color: #1d2327; }
+		.panel-body { padding: 15px; flex-grow: 1; }
+		.panel-footer { border-top: 1px solid #ddd; background: #fafafa; }
+
+		/* ============================================ */
+		/* FORM ELEMENTS                              */
+		/* ============================================ */
+		.puri-input { width: 100%; height: 38px; padding: 0 10px; border: 1px solid #8c8f94; border-radius: 4px; box-sizing: border-box; font-size: 14px; }
+		.puri-input-sm { height: 32px; padding: 0 8px; font-size: 13px; }
+		.bg-gray { background-color: #f0f0f1; color: #646970; }
+		.highlight-input { border-color: #2271b1; font-weight: bold; background: #fff; }
+		.small-label { font-size: 11px; color: #646970; font-weight: 600; display: block; margin-bottom: 4px; text-transform: uppercase; }
+		.form-group { margin-bottom: 12px; }
+		.form-row { display: flex; gap: 10px; }
+		.form-row .col { flex: 1; }
+		.mb-2 { margin-bottom: 10px; }
+		.mb-1 { margin-bottom: 8px; }
+
+		/* ============================================ */
+		/* CUSTOMER PANEL SPECIFIC                    */
+		/* ============================================ */
+		.mode-selector { display: flex; gap: 10px; background: #f0f0f1; padding: 8px; border-radius: 4px; border: 1px solid #dcdcde; }
+		.radio-label { font-size: 13px; font-weight: 500; cursor: pointer; display: flex; align-items: center; gap: 5px; padding: 5px 10px; border-radius: 3px; transition: all 0.2s; }
+		.radio-label:hover { background: #e0e0e1; }
+		.mode-sell input:checked ~ * { color: #0aaf1a; }
+		.mode-buy input:checked ~ * { color: #e67e22; }
+		.customer-select-wrapper { display: flex; gap: 5px; align-items: center; }
+		#btn_add_customer { width: 40px; height: 38px; padding: 0; flex-shrink: 0; }
+		.customer-info-box { background: #f9f9f9; border: 1px solid #e0e0e0; border-radius: 4px; padding: 10px; font-size: 12px; }
+		.customer-info-box .info-row { display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px dashed #e5e5e5; }
+		.customer-info-box .info-row:last-child { border-bottom: none; }
+		.customer-info-box .info-row .info-label { color: #646970; font-weight: 600; }
+		.customer-info-box .info-row .info-value { color: #1d2327; }
+
+		/* ============================================ */
+		/* TRANSACTION PANEL SPECIFIC                 */
+		/* ============================================ */
+		.transaction-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 15px; }
+		.grid-item label { display: block; margin-bottom: 4px; }
+		.item-preview-section { display: flex; gap: 10px; margin-top: 15px; }
+		.item-image-box { width: 80px; height: 80px; background: #eee; border: 1px solid #ccc; border-radius: 4px; display: flex; align-items: center; justify-content: center; overflow: hidden; flex-shrink: 0; }
+		.item-image-box img { width: 100%; height: 100%; object-fit: cover; }
+		.item-action-box { flex: 1; display: flex; flex-direction: column; justify-content: space-between; }
+		.rate-info { font-size: 11px; color: #666; text-align: right; margin-bottom: 5px; }
+
+		/* ============================================ */
+		/* CART PANEL SPECIFIC                        */
+		/* ============================================ */
+		.cart-scroll { overflow-y: auto; height: 250px; padding: 0; border-bottom: 1px solid #eee; }
+		#cart_table th { position: sticky; top: 0; z-index: 10; background: #fff; box-shadow: 0 1px 1px rgba(0,0,0,0.1); }
+		.cart-summary-box { background: #fafafa; padding: 15px; }
+		.checkout-options { margin-bottom: 15px; padding-bottom: 10px; border-bottom: 1px dashed #ddd; }
+		.option-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+		.option-row label { width: 80px; font-size: 12px; color: #646970; font-weight: 600; }
+		.summary-line { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 14px; }
+		.summary-line.main { font-size: 18px; font-weight: bold; border-top: 2px solid #2271b1; padding-top: 12px; margin-top: 8px; }
+		.val-idr { color: #d63638; font-weight: bold; }
+		.val-riyal { color: #2271b1; font-weight: bold; }
+		.checkout-area { margin-top: 15px; }
+		.chk-valid { display: block; margin-bottom: 10px; font-size: 13px; }
+		.button-group { display: flex; gap: 10px; }
+		.button-hero { height: 45px !important; font-size: 15px !important; flex: 1; display: flex; justify-content: center; gap: 8px; align-items: center; }
+
+		/* ============================================ */
+		/* BOTTOM ROW TABLES (STABLE)                 */
+		/* ============================================ */
+		.table-scroll { height: 350px; overflow-y: auto; padding: 0; border-bottom: 1px solid #ddd; position: relative; background: #fff; }
+		.table-scroll thead th { position: sticky; top: 0; background: #f0f0f1; z-index: 10; box-shadow: 0 1px 2px rgba(0,0,0,0.1); cursor: pointer; user-select: none; }
+		.table-scroll thead th:hover { background: #e0e0e1; }
+		#history_table, #stock_table { border-top: none; margin-top: 0; width: 100%; border-collapse: collapse; font-size: 11px; }
+		#stock_table td { padding: 6px 8px; vertical-align: middle; }
+
+		/* ============================================ */
+		/* MODAL STYLES                               */
+		/* ============================================ */
+		.puri-modal { position: fixed; z-index: 99999; inset: 0; background-color: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; }
+		.puri-modal-content { background-color: #fff; border-radius: 8px; width: 90%; max-width: 600px; max-height: 
+
+</style>
 
-            .cockpit-container { 
-                display: flex; 
-                flex-direction: column; 
-                gap: 15px; 
-                margin-top: 15px; 
-            }
 
-            /* ============================================ */
-            /* LAYOUT STRUCTURE                           */
-            /* ============================================ */
-            .flex-row { 
-                display: flex; 
-                gap: 15px; 
-                width: 100%; 
-                flex-wrap: wrap; 
-            }
+// ─────────────────────────────────────────────────────────────────┤ ES6 ARSITEKTUR ├──────────────────
+<script>
+jQuery($ => {
 
-            .flex-col { 
-                display: flex; 
-                flex-direction: column; 
-                gap: 15px; 
-            }
-
-            /* Top Row: 3 Equal Columns */
-            .top-row .col-customer { flex: 1; min-width: 300px; }
-            .top-row .col-transaction { flex: 1; min-width: 350px; }
-            .top-row .col-cart { flex: 1; min-width: 400px; }
-
-            /* Bottom Row: History (30%) + Stock (70%) */
-            .bottom-row .col-history { flex: 3; min-width: 300px; }
-            .bottom-row .col-stock { flex: 7; min-width: 500px; }
-
-            /* ============================================ */
-            /* PANEL COMPONENTS                           */
-            /* ============================================ */
-            .panel { 
-                background: #fff; 
-                border: 1px solid #c3c4c7; 
-                box-shadow: 0 1px 2px rgba(0,0,0,.05); 
-                border-radius: 6px; 
-                display: flex; 
-                flex-direction: column; 
-                height: 100%; 
-            }
-
-            .panel-header { 
-                background: #f6f7f7; 
-                padding: 10px 15px; 
-                font-weight: 600; 
-                border-bottom: 1px solid #c3c4c7; 
-                font-size: 13px; 
-                display: flex; 
-                justify-content: space-between; 
-                align-items: center; 
-                color: #1d2327; 
-            }
-
-            .panel-body { 
-                padding: 15px; 
-                flex-grow: 1; 
-            }
-
-            .panel-footer {
-                border-top: 1px solid #ddd;
-                background: #fafafa;
-            }
-
-            /* ============================================ */
-            /* FORM ELEMENTS                              */
-            /* ============================================ */
-            .puri-input { 
-                width: 100%; 
-                height: 38px; 
-                padding: 0 10px; 
-                border: 1px solid #8c8f94; 
-                border-radius: 4px; 
-                box-sizing: border-box; 
-                font-size: 14px; 
-            }
-
-            .puri-input-sm {
-                width: 100%;
-                height: 32px;
-                padding: 0 8px;
-                border: 1px solid #8c8f94;
-                border-radius: 4px;
-                font-size: 13px;
-            }
-
-            .bg-gray { 
-                background-color: #f0f0f1; 
-                color: #646970; 
-            }
-
-            .highlight-input { 
-                border-color: #2271b1; 
-                font-weight: bold; 
-                background: #fff; 
-            }
-
-            .small-label { 
-                font-size: 11px; 
-                color: #646970; 
-                font-weight: 600; 
-                display: block; 
-                margin-bottom: 4px; 
-                text-transform: uppercase; 
-            }
-
-            .form-group { 
-                margin-bottom: 12px; 
-            }
-
-            .form-row { 
-                display: flex; 
-                gap: 10px; 
-            }
-
-            .form-row .col { 
-                flex: 1; 
-            }
-
-            .mb-2 { margin-bottom: 10px; }
-            .mb-1 { margin-bottom: 8px; }
-
-            /* ============================================ */
-            /* CUSTOMER PANEL SPECIFIC                    */
-            /* ============================================ */
-            .mode-selector {
-                display: flex;
-                gap: 10px;
-                background: #f0f0f1;
-                padding: 8px;
-                border-radius: 4px;
-                border: 1px solid #dcdcde;
-            }
-
-            .radio-label {
-                font-size: 13px;
-                font-weight: 500;
-                cursor: pointer;
-                display: flex;
-                align-items: center;
-                gap: 5px;
-                padding: 5px 10px;
-                border-radius: 3px;
-                transition: all 0.2s;
-            }
-
-            .radio-label:hover {
-                background: #e0e0e1;
-            }
-
-            .mode-sell input:checked ~ * {
-                color: #0aaf1a;
-            }
-
-            .mode-buy input:checked ~ * {
-                color: #e67e22;
-            }
-
-            .customer-select-wrapper {
-                display: flex;
-                gap: 5px;
-                align-items: center;
-            }
-
-            #btn_add_customer {
-                width: 40px;
-                height: 38px;
-                padding: 0;
-                flex-shrink: 0;
-            }
-
-            .customer-info-box {
-                background: #f9f9f9;
-                border: 1px solid #e0e0e0;
-                border-radius: 4px;
-                padding: 10px;
-                font-size: 12px;
-            }
-
-            .info-row {
-                display: flex;
-                justify-content: space-between;
-                padding: 5px 0;
-                border-bottom: 1px dashed #e5e5e5;
-            }
-
-            .info-row:last-child {
-                border-bottom: none;
-            }
-
-            .info-label {
-                color: #646970;
-                font-weight: 600;
-            }
-
-            .info-value {
-                color: #1d2327;
-            }
-
-            /* ============================================ */
-            /* TRANSACTION PANEL SPECIFIC                 */
-            /* ============================================ */
-            .transaction-grid {
-                display: grid;
-                grid-template-columns: 1fr 1fr;
-                gap: 10px;
-                margin-bottom: 15px;
-            }
-
-            .grid-item label {
-                display: block;
-                margin-bottom: 4px;
-            }
-
-            .item-preview-section {
-                display: flex;
-                gap: 10px;
-                margin-top: 15px;
-            }
-
-            .item-image-box { 
-                width: 80px; 
-                height: 80px; 
-                background: #eee; 
-                border: 1px solid #ccc; 
-                border-radius: 4px; 
-                display: flex; 
-                align-items: center; 
-                justify-content: center; 
-                overflow: hidden; 
-                flex-shrink: 0;
-            }
-
-            .item-image-box img { 
-                width: 100%; 
-                height: 100%; 
-                object-fit: cover; 
-            }
-
-            .item-action-box {
-                flex: 1;
-                display: flex;
-                flex-direction: column;
-                justify-content: space-between;
-            }
-
-            .rate-info {
-                font-size: 11px;
-                color: #666;
-                text-align: right;
-                margin-bottom: 5px;
-            }
-
-            /* ============================================ */
-            /* CART PANEL SPECIFIC                        */
-            /* ============================================ */
-            .cart-scroll { 
-                overflow-y: auto; 
-                height: 250px; 
-                padding: 0; 
-                border-bottom: 1px solid #eee; 
-            }
-
-            #cart_table th { 
-                position: sticky; 
-                top: 0; 
-                z-index: 10; 
-                background: #fff; 
-                box-shadow: 0 1px 1px rgba(0,0,0,0.1); 
-            }
-
-            .cart-summary-box { 
-                background: #fafafa; 
-                padding: 15px; 
-            }
-
-            .checkout-options {
-                margin-bottom: 15px;
-                padding-bottom: 10px;
-                border-bottom: 1px dashed #ddd;
-            }
-
-            .option-row {
-                display: flex;
-                align-items: center;
-                gap: 10px;
-                margin-bottom: 8px;
-            }
-
-            .option-row label {
-                width: 80px;
-                font-size: 12px;
-                color: #646970;
-                font-weight: 600;
-            }
-
-            .summary-line { 
-                display: flex; 
-                justify-content: space-between; 
-                margin-bottom: 8px; 
-                font-size: 14px; 
-            }
-
-            .summary-line.main { 
-                font-size: 18px; 
-                font-weight: bold; 
-                border-top: 2px solid #2271b1; 
-                padding-top: 12px; 
-                margin-top: 8px; 
-            }
-
-            .val-idr { 
-                color: #d63638; 
-                font-weight: bold;
-            }
-
-            .val-riyal {
-                color: #2271b1;
-                font-weight: bold;
-            }
-
-            .checkout-area {
-                margin-top: 15px;
-            }
-
-            .chk-valid {
-                display: block;
-                margin-bottom: 10px;
-                font-size: 13px;
-            }
-
-            .button-group {
-                display: flex;
-                gap: 10px;
-            }
-
-            .button-hero { 
-                height: 45px !important; 
-                font-size: 15px !important; 
-                flex: 1;
-                justify-content: center; 
-                display: flex; 
-                gap: 8px; 
-                align-items: center; 
-            }
-
-            /* ============================================ */
-            /* BOTTOM ROW TABLES (STABLE)                 */
-            /* ============================================ */
-            .table-scroll { 
-                height: 350px; 
-                overflow-y: auto; 
-                padding: 0; 
-                border-bottom: 1px solid #ddd; 
-                position: relative; 
-                background: #fff; 
-            }
-
-            .table-scroll thead th { 
-                position: sticky; 
-                top: 0; 
-                background: #f0f0f1; 
-                z-index: 10; 
-                box-shadow: 0 1px 2px rgba(0,0,0,0.1); 
-                cursor: pointer; 
-                user-select: none; 
-            }
-
-            .table-scroll thead th:hover { 
-                background: #e0e0e1; 
-            }
-
-            #history_table, #stock_table { 
-                border-top: none; 
-                margin-top: 0; 
-                width: 100%; 
-                border-collapse: collapse; 
-                font-size: 11px; 
-            }
-
-            #stock_table td { 
-                padding: 6px 8px; 
-                vertical-align: middle; 
-            }
-
-            /* ============================================ */
-            /* MODAL STYLES                               */
-            /* ============================================ */
-            .puri-modal {
-                position: fixed;
-                z-index: 99999;
-                left: 0;
-                top: 0;
-                width: 100%;
-                height: 100%;
-                background-color: rgba(0,0,0,0.6);
-                display: flex;
-                align-items: center;
-                justify-content: center;
-            }
-
-            .puri-modal-content {
-                background-color: #fff;
-                border-radius: 8px;
-                width: 90%;
-                max-width: 600px;
-                max-height: 90vh;
-                overflow-y: auto;
-                box-shadow: 0 4px 20px rgba(0,0,0,0.3);
-            }
-
-            .puri-modal-header {
-                background: #f6f7f7;
-                padding: 15px 20px;
-                border-bottom: 1px solid #ddd;
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-            }
-
-            .puri-modal-header h2 {
-                margin: 0;
-                font-size: 18px;
-                color: #1d2327;
-            }
-
-            .puri-modal-close {
-                background: none;
-                border: none;
-                font-size: 28px;
-                font-weight: bold;
-                color: #646970;
-                cursor: pointer;
-                line-height: 1;
-                padding: 0;
-            }
-
-            .puri-modal-close:hover {
-                color: #d63638;
-            }
-
-            .puri-modal-body {
-                padding: 20px;
-            }
-
-            /* ============================================ */
-            /* UTILITY CLASSES                            */
-            /* ============================================ */
-            .tr { text-align: right; }
-            .tc { text-align: center; }
-            .hidden { display: none; }
-            .text-red { color: #d63638; }
-            .text-blue { color: #2271b1; font-weight: bold; }
-            .text-green { color: #059669; }
-
-            /* ============================================ */
-            /* MODE INDICATOR (SELL/BUY)                  */
-            /* ============================================ */
-            .panel-transaction.mode-sell .panel-header {
-                border-left: 4px solid #0aaf1a;
-                background: #f0fdf4;
-            }
-
-            .panel-transaction.mode-buy .panel-header {
-                border-left: 4px solid #e67e22;
-                background: #fff7ed;
-            }
-
-            /* ============================================ */
-            /* RESPONSIVE DESIGN                          */
-            /* ============================================ */
-            @media (max-width: 1200px) {
-                .flex-row { 
-                    flex-direction: column; 
-                }
-                .top-row .col-customer,
-                .top-row .col-transaction,
-                .top-row .col-cart { 
-                    width: 100%; 
-                    flex: auto; 
-                }
-            }
-			
-			/* ============================================ */
-/* DAILY MUTATION STATUS INDICATORS           */
-/* ============================================ */
-
-/* Status badges */
-.badge {
-    display: inline-block;
-    padding: 2px 6px;
-    font-size: 10px;
-    font-weight: 600;
-    border-radius: 3px;
-    margin-left: 5px;
-    vertical-align: middle;
-}
-
-.badge-warning {
-    background: #f59e0b;
-    color: white;
-}
-
-.badge-info {
-    background: #3b82f6;
-    color: white;
-}
-
-.badge-success {
-    background: #10b981;
-    color: white;
-}
-
-.badge-danger {
-    background: #ef4444;
-    color: white;
-}
-
-/* Row styling based on status */
-#history_table tr.row-void {
-    opacity: 0.5;
-    text-decoration: line-through;
-    background: #fee;
-}
-
-#history_table tr.row-posted {
-    background: #f0fdf4;
-    border-left: 3px solid #10b981;
-}
-
-#history_table tr.row-void td {
-    color: #999;
-}
-
-/* Hover effect */
-#history_table tbody tr:hover {
-    background: #f9fafb;
-    cursor: pointer;
-}
-
-/* Empty state */
-#history_table .fa-inbox {
-    display: block;
-    margin-bottom: 10px;
-}
-			
-        </style>
-
-        <script>
-        jQuery(document).ready(function($) {
-            
-            /**
-             * ====================================================
-             * COCKPIT GLOBAL STATE
-             * ====================================================
-             */
-            const Cockpit = { 
-                cart: [], 
-                stockData: [],
-                currentCustomer: null 
-            };
-            
-            let sortKey = 'denom'; 
-            let sortAsc = true;
-            let tradeMode = 'sell';
-
-            /**
-             * ====================================================
-             * UTILITY FUNCTIONS
-             * ====================================================
-             */
-            function parseNum(val) { return parseFloat(val) || 0; }
-            function fmt(n) { return n.toLocaleString('en-US'); }
-            function fmtIDR(n) { return n.toLocaleString('id-ID'); }
-
-            /**
-             * ====================================================
-             * INITIALIZATION
-             * ====================================================
-             */
-            function init() {
-                loadStockAndHistory();
-                setupListeners();
-                
-                // Initialize Select2
-                $('#item_select').select2({ 
-                    placeholder: "Select Item...", 
-                    width: '100%' 
-                });
-                
-                $('#customer_select').select2({ 
-                    placeholder: "Select Customer...", 
-                    width: '100%', 
-                    allowClear: true 
-                });
-                
-                // Initial mode guard
-                applyModeGuard();
-            }
-
-            /**
-             * ====================================================
-             * EVENT LISTENERS SETUP
-             * ====================================================
-             */
-            function setupListeners() {
-                
-                // Trade Mode Handler
-                $('input[name="trade_mode"]').on('change', function() {
-                    tradeMode = $(this).val();
-                    applyModeGuard();
-                });
-
-                // Customer Selection Handler
-                $('#customer_select').on('select2:select', function(e) {
-                    let opt = $(this).find(':selected');
-                    Cockpit.currentCustomer = {
-                        id: opt.val(),
-                        name: opt.text(),
-                        nik: opt.data('nik') || '-',
-                        phone: opt.data('phone') || '-',
-                        address: opt.data('address') || '-',
-                        type: opt.data('type') || 'Member'
-                    };
-                    
-                    displayCustomerInfo();
-                    checkRateEditable(Cockpit.currentCustomer.type);
-                });
-
-                $('#customer_select').on('select2:clear', function() {
-                    Cockpit.currentCustomer = null;
-                    $('#customer_info_box').addClass('hidden');
-                    checkRateEditable('');
-                });
-
-                // Add Customer Modal
-                $('#btn_add_customer').click(function() {
-                    $('#modal_add_customer').show();
-                });
-
-                $('.puri-modal-close').click(function() {
-                    $('#modal_add_customer').hide();
-                });
-
-                $('#form_new_customer').submit(function(e) {
-                    e.preventDefault();
-                    saveNewCustomer();
-                });
-
-                // Item Selection
-                $('#item_select').on('select2:select', function(e) {
-                    let opt = $(this).find(':selected');
-                    let denom = parseNum(opt.data('denom'));
-                    let rate = parseNum(opt.data('rate'));
-                    let stock = parseNum(opt.data('stock'));
-                    let img = opt.data('img') || '<?php echo plugin_dir_url(__FILE__) . "assets/img/no-image.png"; ?>';
-
-                    if (denom <= 0) {
-                        Swal.fire('Invalid Data', 'Item has denomination 0', 'error');
-                    }
-
-                    $('#inp_denom').val(denom);
-                    $('#base_rate_hidden').val(rate);
-                    $('#current_stock').val(stock);
-                    $('#item_img_preview').attr('src', img);
-                    $('#inp_rate').val(rate);
-                    $('#info_base_rate').text(rate.toLocaleString());
-                    $('#inp_qty').val('').focus();
-                    $('#inp_total_riyal').val('');
-                    $('#inp_total_idr').val('Rp 0');
-                    checkStockLock();
-                });
-
-                // Calculations
-                $('#inp_qty').on('input', function() {
-                    let qty = parseNum($(this).val());
-                    let denom = parseNum($('#inp_denom').val());
-                    let riyal = qty * denom;
-                    if (denom > 0) {
-                        $('#inp_total_riyal').val(riyal > 0 ? riyal : '');
-                    }
-                    calcFinalIDR();
-                    checkStockLock();
-                });
-
-                $('#inp_total_riyal').on('input', function() {
-                    let riyal = parseNum($(this).val());
-                    let denom = parseNum($('#inp_denom').val());
-                    if (denom > 0) {
-                        let qty = riyal / denom;
-                        $('#inp_qty').val(qty > 0 ? qty : '');
-                    }
-                    calcFinalIDR();
-                    checkStockLock();
-                });
-
-                $('#inp_rate').on('input', function() {
-                    calcFinalIDR();
-                });
-
-                // Clear Form
-                $('#btn_clear_form').click(function() {
-                    $('#item_select').val(null).trigger('change');
-                    $('#inp_qty').val('');
-                    $('#inp_total_riyal').val('');
-                    $('#inp_total_idr').val('Rp 0');
-                    $('#btn_add_cart').prop('disabled', true);
-                    
-                    if (Cockpit.cart.length === 0) {
-                        tradeMode = 'sell';
-                        $('input[name="trade_mode"][value="sell"]').prop('checked', true);
-                        applyModeGuard();
-                        $('input[name="trade_mode"]').prop('disabled', false);
-                    }
-                });
-
-                // Cart Actions
-                $('#btn_add_cart').click(addToCart);
-                $('#inp_qty').keypress(function(e) {
-                    if (e.which == 13 && !$('#btn_add_cart').prop('disabled')) {
-                        $('#btn_add_cart').click();
-                    }
-                });
-
-                $(document).on('click', '.btn-remove-item', function() {
-                    removeItem($(this).data('index'));
-                });
-
-                $('#btn_checkout').click(handleCheckout);
-                $('#btn_reset_cart').click(function() {
-                    if (Cockpit.cart.length === 0) return;
-                    Swal.fire({
-                        title: 'Reset Cart?',
-                        text: 'All items will be removed',
-                        icon: 'warning',
-                        showCancelButton: true,
-                        confirmButtonText: 'Yes, reset',
-                        confirmButtonColor: '#d63638'
-                    }).then((result) => {
-                        if (result.isConfirmed) {
-                            Cockpit.cart = [];
-                            renderCart();
-                            unlockSession();
-                            Swal.fire('Reset!', 'Cart has been cleared', 'success');
-                        }
-                    });
-                });
-
-                $('#btn_refresh_history').click(loadStockAndHistory);
-
-                // Stock Table Sorting
-                $('.sortable-header th').click(function() {
-                    let key = $(this).data('sort');
-                    if (key) {
-                        if (sortKey === key) {
-                            sortAsc = !sortAsc;
-                        } else {
-                            sortKey = key;
-                            sortAsc = true;
-                        }
-                        renderStockTable();
-                    }
-                });
-            }
-
-            /**
-             * ====================================================
-             * CUSTOMER MANAGEMENT
-             * ====================================================
-             */
-            function displayCustomerInfo() {
-                if (!Cockpit.currentCustomer) return;
-                
-                $('#info_nik').text(Cockpit.currentCustomer.nik);
-                $('#info_phone').text(Cockpit.currentCustomer.phone);
-                $('#info_address').text(Cockpit.currentCustomer.address);
-                $('#customer_info_box').removeClass('hidden');
-            }
-
-            function saveNewCustomer() {
-                Swal.fire({
-                    title: 'Saving Customer...',
-                    text: 'Uploading data...',
-                    didOpen: () => Swal.showLoading()
-                });
-
-                let formData = new FormData($('#form_new_customer')[0]);
-                formData.append('action', 'puri_pos_create_customer');
-                formData.append('nonce', '<?php echo wp_create_nonce("puri_pos_create_customer"); ?>');
-
-                $.ajax({
-                    url: ajaxurl,
-                    type: 'POST',
-                    data: formData,
-                    processData: false,
-                    contentType: false,
-                    success: function(response) {
-                        if (response.success) {
-                            Swal.fire('Success!', 'Customer created: ' + response.data.name, 'success');
-                            
-                            // Add to dropdown
-                            let newOption = new Option(response.data.name, response.data.id, true, true);
-                            $(newOption).attr({
-                                'data-nik': response.data.nik,
-                                'data-phone': response.data.phone,
-                                'data-address': response.data.address,
-                                'data-type': 'umum'
-                            });
-                            $('#customer_select').append(newOption).trigger('change');
-                            
-                            $('#modal_add_customer').hide();
-                            $('#form_new_customer')[0].reset();
-                        } else {
-                            Swal.fire('Failed', response.data, 'error');
-                        }
-                    },
-                    error: function() {
-                        Swal.fire('Error', 'Server error occurred', 'error');
-                    }
-                });
-            }
-
-            /**
-             * ====================================================
-             * RATE EDITING PERMISSIONS
-             * ====================================================
-             */
-            function checkRateEditable(custType) {
-                let isFinance = $('#is_finance').val() === '1';
-                let isAgen = (custType === 'agen' || custType === 'agent');
-                
-                if (isFinance || isAgen) {
-                    $('#inp_rate').prop('readonly', false)
-                                  .removeClass('bg-gray')
-                                  .addClass('highlight-input');
-                } else {
-                    $('#inp_rate').prop('readonly', true)
-                                  .addClass('bg-gray')
-                                  .removeClass('highlight-input');
-                    $('#inp_rate').val($('#base_rate_hidden').val());
-                    calcFinalIDR();
-                }
-            }
-
-            /**
-             * ====================================================
-             * CALCULATIONS
-             * ====================================================
-             */
-            function calcFinalIDR() {
-                let riyal = parseNum($('#inp_total_riyal').val());
-                let rate = parseNum($('#inp_rate').val());
-                let idr = riyal * rate;
-                $('#inp_total_idr').val('Rp ' + fmtIDR(idr));
-            }
-
-            function checkStockLock() {
-                let qty = parseNum($('#inp_qty').val());
-                let riyal = parseNum($('#inp_total_riyal').val());
-                let stock = parseNum($('#current_stock').val());
-                let denom = parseNum($('#inp_denom').val());
-                let btn = $('#btn_add_cart');
-                let warn = $('#stock_warning');
-                
-                let stockCheck = (tradeMode === 'buy') ? true : (qty <= stock);
-                let isValid = (qty > 0) && (riyal > 0) && (denom > 0) && stockCheck;
-                
-                if (isValid) {
-                    btn.prop('disabled', false);
-                    warn.addClass('hidden');
-                } else {
-                    btn.prop('disabled', true);
-                    if (tradeMode === 'sell' && qty > stock) {
-                        warn.removeClass('hidden').html('<i class="fa-solid fa-triangle-exclamation"></i> Exceeds Stock!');
-                    } else if (denom === 0 && qty > 0) {
-                        warn.removeClass('hidden').html('<i class="fa-solid fa-triangle-exclamation"></i> Error: Denom 0');
-                    } else {
-                        warn.addClass('hidden');
-                    }
-                }
-            }
-
-            /**
-             * ====================================================
-             * CART MANAGEMENT
-             * ====================================================
-             */
-            function addToCart() {
-                let itemId = $('#item_select').val();
-                let itemName = $('#item_select option:selected').text().trim();
-                let denom = parseNum($('#inp_denom').val());
-                let rate = parseNum($('#inp_rate').val());
-                let qty = parseNum($('#inp_qty').val());
-                let riyal = parseNum($('#inp_total_riyal').val());
-                let idr = riyal * rate;
-
-                if (!itemId) {
-                    Swal.fire('Failed', 'Select an item first', 'error');
-                    return;
-                }
-                if (qty <= 0) {
-                    Swal.fire('Failed', 'Qty cannot be 0', 'warning');
-                    return;
-                }
-
-                Cockpit.cart.push({
-                    id: itemId,
-                    name: itemName.split('(')[0].trim(),
-                    denom: denom,
-                    rate: rate,
-                    qty: qty,
-                    riyal: riyal,
-                    idr: idr
-                });
-
-                let sfx = document.getElementById('fx_cart_clicked');
-                if (sfx) sfx.play();
-
-                lockSession();
-                $('#btn_clear_form').click();
-                renderCart();
-            }
-
-            function removeItem(index) {
-                Cockpit.cart.splice(index, 1);
-                renderCart();
-                if (Cockpit.cart.length === 0) {
-                    unlockSession();
-                }
-            }
-
-            function renderCart() {
-                let tbody = $('#cart_table tbody');
-                tbody.empty();
-                let sumRiyal = 0;
-                let sumIDR = 0;
-
-                if (Cockpit.cart.length === 0) {
-                    tbody.html(`<tr class="empty-cart"><td colspan="5" align="center" style="padding:20px; color:#aaa;"><i class="fa-solid fa-cart-shopping" style="font-size:40px; opacity:0.3;"></i><br>Cart is empty</td></tr>`);
-                } else {
-                    Cockpit.cart.forEach((item, index) => {
-                        sumRiyal += item.riyal;
-                        sumIDR += item.idr;
-                        tbody.append(`<tr>
-                            <td>${item.name}</td>
-                            <td class="tc">${item.qty}</td>
-                            <td class="tr">${fmt(item.riyal)}</td>
-                            <td class="tr">${fmtIDR(item.idr)}</td>
-                            <td class="tc">
-                                <button class="button button-small btn-remove-item" data-index="${index}">
-                                    <i class="fa fa-times" style="color:red"></i>
-                                </button>
-                            </td>
-                        </tr>`);
-                    });
-                }
-
-                $('#cart_total_riyal').text(fmt(sumRiyal));
-                $('#cart_total_idr').text('Rp ' + fmtIDR(sumIDR));
-            }
-
-            /**
-             * ====================================================
-             * SESSION LOCK/UNLOCK
-             * ====================================================
-             */
-            function lockSession() {
-                $('input[name="trade_mode"]').prop('disabled', true);
-            }
-
-            function unlockSession() {
-                $('input[name="trade_mode"]').prop('disabled', false);
-                tradeMode = 'sell';
-                $('input[name="trade_mode"][value="sell"]').prop('checked', true);
-                applyModeGuard();
-            }
-
-            /**
-             * ====================================================
-             * CHECKOUT HANDLER
-             * ====================================================
-             */
-            function handleCheckout() {
-                // Validation
-                if (Cockpit.cart.length === 0) {
-                    return Swal.fire('Empty Cart', 'Cart is empty', 'warning');
-                }
-                
-                if (!Cockpit.currentCustomer) {
-                    return Swal.fire('Customer Required', 'Please select a customer first', 'error');
-                }
-                
-                if (!$('#chk_valid').is(':checked')) {
-                    return Swal.fire('Confirmation', 'Please check "Data & Amount Verified"', 'info');
-                }
-
-                // Dynamic confirmation
-                let titleText = (tradeMode === 'buy') ? 'Confirm Purchase?' : 'Cash Received?';
-                let btnColor = (tradeMode === 'buy') ? '#d63638' : '#2271b1';
-                let htmlText = `Total: <b>${$('#cart_total_idr').text()}</b><br>` +
-                    ((tradeMode === 'buy') ? 'Stock will increase.' : 'Stock will decrease.');
-
-                Swal.fire({
-                    title: titleText,
-                    html: htmlText,
-                    icon: 'question',
-                    showCancelButton: true,
-                    confirmButtonText: 'Proceed',
-                    confirmButtonColor: btnColor
-                }).then((res) => {
-                    if (res.isConfirmed) {
-                        processTransaction();
-                    }
-                });
-            }
-
-            /**
-             * ====================================================
-             * TRANSACTION PROCESSING
-             * ====================================================
-             */
-            function processTransaction() {
-                Swal.fire({
-                    title: 'Processing...',
-                    text: 'Uploading data...',
-                    didOpen: () => Swal.showLoading()
-                });
-
-                let formData = new FormData();
-                formData.append('action', 'puri_pos_checkout');
-                formData.append('nonce', '<?php echo wp_create_nonce("puri_pos_checkout"); ?>');
-                formData.append('cart', JSON.stringify(Cockpit.cart));
-                formData.append('cust_mode', 'registered');
-                formData.append('trade_mode', tradeMode);
-                formData.append('cust_id', Cockpit.currentCustomer.id);
-                formData.append('payment_method', $('#payment_method').val());
-                formData.append('delivery_method', $('#delivery_method').val());
-
-                $.ajax({
-                    url: ajaxurl,
-                    type: 'POST',
-                    data: formData,
-                    processData: false,
-                    contentType: false,
-                    success: function(response) {
-                        if (response.success) {
-                            Swal.fire('Success!', 'Ref: ' + response.data.ref_id, 'success');
-                            Cockpit.cart = [];
-                            unlockSession();
-                            $('#btn_clear_form').click();
-                            renderCart();
-                            loadStockAndHistory();
-                        } else {
-                            Swal.fire('Failed', response.data, 'error');
-                        }
-                    },
-                    error: function() {
-                        Swal.fire('Error', 'Server error', 'error');
-                    }
-                });
-            }
-
-            /**
-             * ====================================================
-             * DATA LOADING
-             * ====================================================
-             */
-            function loadStockAndHistory() {
-                // Daily Mutation
-// Daily Mutation (Pool Mode)
-$.ajax({
+/* =====================================================
+ * UTILITIES (Tetap, sudah bagus)
+ * ===================================================== */
+const U = {
+  num : v => parseFloat(v) || 0,
+  fmt : n => n.toLocaleString('en-US'),
+  idr : n => n.toLocaleString('id-ID'),
+  ajax: cfg => $.ajax(Object.assign({
     url: ajaxurl,
-    data: { action: 'puri_pos_get_daily_mutation' },
     cache: false,
-    success: function(res) {
-        if (res.success) {
-            let html = '';
-            
-            // Data structure changed: res.data.transactions (array)
-            const transactions = res.data.transactions || [];
-            const summary = res.data.summary || { total_riyal: 0, total_idr: 0, count: 0 };
-            
-            if (transactions.length === 0) {
-                html = `<tr>
-                    <td colspan="4" style="text-align:center; padding:20px; color:#999;">
-                        <i class="fa-solid fa-inbox" style="font-size:30px; opacity:0.3;"></i>
-                        <br>No transactions today
-                    </td>
-                </tr>`;
-            } else {
-                transactions.forEach(trx => {
-                    // Add row class based on status
-                    let rowClass = '';
-                    if (trx.status === 'void') rowClass = 'class="row-void"';
-                    else if (trx.status === 'posted') rowClass = 'class="row-posted"';
-                    
-                    html += `<tr ${rowClass}>
-                        <td>${trx.time}</td>
-                        <td>${trx.ref_id}</td>
-                        <td class="tr">${trx.total_riyal}</td>
-                        <td class="tr">${trx.total_idr}</td>
-                    </tr>`;
-                });
-            }
-            
-            // Update table
-            $('#history_table tbody').html(html);
-            
-            // Update summary display
-            $('#val_sum_riyal').text(fmt(summary.total_riyal));
-            $('#val_sum_idr').text(fmtIDR(summary.total_idr));
-            
-            // Show/hide summary box
-            if (summary.count > 0) {
-                $('#box_history_summary').removeClass('hidden');
-            } else {
-                $('#box_history_summary').addClass('hidden');
+    error: () => Swal.fire('Error','Server error','error')
+  }, cfg))
+};
+
+/* =====================================================
+ * MAIN CLASS: CockpitPOS
+ * ===================================================== */
+class CockpitPOS {
+
+  constructor() {
+    this.cart = [];
+    this.stockData = [];
+    this.currentCustomer = null;
+
+    this.tradeMode = 'sell'; // default
+    this.sortKey = 'denom';
+    this.sortAsc = true;
+
+    this.cacheDom();
+    this.init();
+  }
+
+  cacheDom() {
+    this.$item   = $('#item_select');
+    this.$cust   = $('#customer_select');
+    this.$qty    = $('#inp_qty');
+    this.$riyal  = $('#inp_total_riyal'); // Representasi total_valas
+    this.$idr    = $('#inp_total_idr');
+    this.$rate   = $('#inp_rate');
+    this.$btnAdd = $('#btn_add_cart');
+    this.$panel  = $('#panelInputTransaksi');
+    this.$payMethod = $('#payment_method'); // TAMBAHAN: Untuk Mozart
+  }
+
+  init() {
+    this.loadStockAndHistory();
+    this.bindEvents();
+
+    this.$item.select2({ placeholder:'Select Item...', width:'100%' });
+    this.$cust.select2({ placeholder:'Select Customer...', width:'100%', allowClear:true });
+
+    this.applyModeGuard();
+  }
+
+  bindEvents() {
+    // Mode Switcher
+    $('input[name="trade_mode"]').on('change', e => {
+      this.tradeMode = e.target.value;
+      this.applyModeGuard();
+    });
+
+    this.$cust
+      .on('select2:select', () => this.selectCustomer())
+      .on('select2:clear',  () => this.clearCustomer());
+
+    this.$item.on('select2:select', () => this.selectItem());
+
+    this.$qty.on('input',   () => this.syncFromQty());
+    this.$riyal.on('input', () => this.syncFromRiyal());
+    this.$rate.on('input',  () => this.calcFinalIDR());
+
+    this.$btnAdd.on('click', () => this.addToCart());
+    $('#btn_checkout').on('click', () => this.handleCheckout());
+
+    // Event delegation untuk tombol hapus di cart
+    $(document).on('click','.btn-remove-item', e => 
+      this.removeItem($(e.currentTarget).data('index'))
+    );
+
+    $('#btn_refresh_history').on('click', () => this.loadStockAndHistory());
+  }
+
+  /* ---------------- CUSTOMER LOGIC ---------------- */
+  selectCustomer() {
+    const o = this.$cust.find(':selected');
+    this.currentCustomer = {
+      id: o.val(),
+      name: o.text(),
+      type: o.data('type') || 'Member'
+    };
+    $('#customer_info_box').removeClass('hidden');
+    this.checkRateEditable(this.currentCustomer.type);
+  }
+
+  clearCustomer() {
+    this.currentCustomer = null;
+    $('#customer_info_box').addClass('hidden');
+    this.checkRateEditable('');
+  }
+
+  /* ---------------- CALCULATION LOGIC ---------------- */
+  selectItem() {
+    const o = this.$item.find(':selected');
+    $('#inp_denom').val(U.num(o.data('denom')));
+    $('#base_rate_hidden').val(U.num(o.data('rate')));
+    $('#current_stock').val(U.num(o.data('stock')));
+    
+    this.$rate.val(U.num(o.data('rate')));
+    this.$qty.val('');
+    this.$riyal.val('');
+    this.$idr.val('Rp 0');
+
+    this.checkStockLock();
+  }
+
+  syncFromQty() {
+    const d = U.num($('#inp_denom').val());
+    if (d) this.$riyal.val(U.num(this.$qty.val()) * d || '');
+    this.recalc();
+  }
+
+  syncFromRiyal() {
+    const d = U.num($('#inp_denom').val());
+    if (d) this.$qty.val(U.num(this.$riyal.val()) / d || '');
+    this.recalc();
+  }
+
+  recalc() {
+    const idr = U.num(this.$riyal.val()) * U.num(this.$rate.val());
+    this.$idr.val('Rp ' + U.idr(idr));
+    this.checkStockLock();
+  }
+
+  checkStockLock() {
+    const qty = U.num(this.$qty.val());
+    const stock = U.num($('#current_stock').val());
+    const ok = qty > 0 && (this.tradeMode === 'buy' || qty <= stock);
+    this.$btnAdd.prop('disabled', !ok);
+  }
+
+  /* ---------------- CART LOGIC (Sinkron Mozart) ---------------- */
+  addToCart() {
+    const o = this.$item.find(':selected');
+    const item = {
+      id:          this.$item.val(),
+      sku:         o.data('sku'), // TAMBAHAN: Untuk Mozart Ledger
+      name:        o.text().split('(')[0].trim(),
+      denom:       $('#inp_denom').val(),
+      qty:         U.num(this.$qty.val()),
+      total_valas: U.num(this.$riyal.val()), // Ubah nama agar sinkron backend
+      rate:        U.num(this.$rate.val()),
+      subtotal_idr: U.num(this.$riyal.val()) * U.num(this.$rate.val()) // Ubah nama
+    };
+
+    this.cart.push(item);
+    this.lockSession();
+    this.renderCart();
+  }
+
+  removeItem(i) {
+    this.cart.splice(i,1);
+    this.renderCart();
+    if (!this.cart.length) this.unlockSession();
+  }
+
+  renderCart() {
+    const $tb = $('#cart_table tbody').empty();
+    let totalV = 0, totalI = 0;
+
+    if (!this.cart.length) {
+      return $tb.html(`<tr><td colspan="5" align="center">Cart is empty</td></tr>`);
+    }
+
+    this.cart.forEach((x, n) => {
+      totalV += x.total_valas; totalI += x.subtotal_idr;
+      $tb.append(`
+        <tr>
+          <td>${x.name}</td>
+          <td class="tc">${x.qty}</td>
+          <td class="tr">${U.fmt(x.total_valas)}</td>
+          <td class="tr">${U.idr(x.subtotal_idr)}</td>
+          <td class="tc">
+            <button class="btn-remove-item" data-index="${n}">❌</button>
+          </td>
+        </tr>`);
+    });
+
+    $('#cart_total_riyal').text(U.fmt(totalV));
+    $('#cart_total_idr').text('Rp ' + U.idr(totalI));
+  }
+
+/* =====================================================
+   * RENDER HISTORY (POOL MONITOR)
+   * ===================================================== */
+  renderHistoryTable() {
+    const $tb = $('#history_table tbody').empty();
+    
+    if (!this.historyData || this.historyData.length === 0) {
+      $tb.html('<tr><td colspan="5" align="center" style="padding:20px;">Belum ada transaksi di pool hari ini.</td></tr>');
+      return;
+    }
+
+    this.historyData.forEach((h, index) => {
+      // Styling berdasarkan mode
+      const modeColor = h.trade_mode === 'sell' ? '#2271b1' : '#d63638';
+      const modeLabel = h.trade_mode === 'sell' ? 'JUAL' : 'BELI';
+      
+      $tb.append(`
+        <tr class="pool-row">
+          <td class="tc"><strong>${h.time}</strong></td>
+          <td>
+            <span class="badge-mode" style="background:${modeColor}; color:#fff; padding:2px 6px; border-radius:3px; font-size:10px;">
+              ${modeLabel}
+            </span>
+            <code style="font-weight:bold; margin-left:5px;">${h.ref_id}</code>
+          </td>
+          <td>${h.customer_name || 'Walking Customer'}</td>
+          <td class="tr" style="font-family:monospace; font-weight:bold;">
+            ${U.idr(h.total_amount)}
+          </td>
+          <td class="tc">
+            <div class="btn-group-history">
+              <button onclick="window.Cockpit.editFromPool('${h.ref_id}')" class="button button-small" title="Edit Transaksi">
+                <i class="fa fa-pencil-alt" style="color:#2271b1"></i>
+              </button>
+
+              <button onclick="window.Cockpit.confirmVoid('${h.ref_id}')" class="button button-small" title="Hapus Permanen">
+                <i class="fa fa-trash" style="color:#d63638"></i>
+              </button>
+            </div>
+          </td>
+        </tr>
+      `);
+    });
+  }
+
+  // Helper untuk konfirmasi penghapusan (Void)
+  confirmVoid(refId) {
+    Swal.fire({
+      title: 'Hapus Transaksi?',
+      text: "Data akan dihapus dari Pool dan stok fisik dikembalikan.",
+      icon: 'error',
+      showCancelButton: true,
+      confirmButtonColor: '#d63638',
+      confirmButtonText: 'Ya, Hapus!'
+    }).then((result) => {
+      if (result.isConfirmed) {
+        this.silentVoid(refId); // Menggunakan fungsi yang kita buat di Part 3.1
+        Swal.fire('Deleted', 'Transaksi berhasil dihapus.', 'success');
+        this.loadStockAndHistory(); // Refresh tabel
+      }
+    });
+  }
+
+
+/* =====================================================
+ * EDIT FROM POOL LOGIC  - CRUD SCHEME
+ * ===================================================== */
+editFromPool(refId) {
+    Swal.fire({
+        title: 'Edit Transaksi?',
+        text: "Data akan dikembalikan ke keranjang untuk diperbaiki.",
+        icon: 'warning',
+        showCancelButton: true,
+        confirmButtonColor: '#2271b1',
+        confirmButtonText: 'Ya, Bongkar Keranjang'
+    }).then((result) => {
+        if (result.isConfirmed) {
+            U.ajax({
+                data: { 
+                    action: 'puri_pos_get_pool_snapshot', 
+                    ref_id: refId,
+                    nonce: '<?php echo wp_create_nonce("puri_pos_checkout"); ?>'
+                },
+                success: (r) => {
+                    if (r.success) {
+                        // 1. Restore State
+                        this.cart = r.data.cart;
+                        this.tradeMode = r.data.trade_mode;
+                        
+                        // 2. Update UI Radio Button Mode
+                        $(`input[name="trade_mode"][value="${this.tradeMode}"]`).prop('checked', true);
+                        
+                        // 3. Update Customer (Trigger Select2)
+                        this.$cust.val(r.data.cust_id).trigger('change');
+                        
+                        // 4. Update Payment Method
+                        this.$payMethod.val(r.data.pay_method);
+
+                        // 5. Render & Lock
+                        this.renderCart();
+                        this.applyModeGuard();
+                        this.lockSession(); // Kunci mode agar tidak berubah saat edit
+
+                        // 6. Jalankan Fungsi Hapus/Void pada data lama di Pool
+                        // Agar tidak double saat di-checkout ulang nanti
+                        this.silentVoid(refId);
+
+                        Swal.fire('Restored', 'Silakan lakukan perbaikan.', 'success');
+                    } else {
+                        Swal.fire('Error', r.data, 'error');
+                    }
+                }
+            });
+        }
+    });
+}
+
+silentVoid(refId) {
+    U.ajax({
+        data: { 
+            action: 'puri_pos_void_pool', 
+            ref_id: refId,
+            mode: 'silent' // Tanpa alert karena ini proses edit
+        }
+    });
+}
+
+
+
+  /* ---------------- SESSION & DATA ---------------- */
+  lockSession() { $('input[name="trade_mode"]').prop('disabled', true); }
+  unlockSession() { $('input[name="trade_mode"]').prop('disabled', false); }
+
+  applyModeGuard() {
+    this.$panel.removeClass('mode-buy mode-sell').addClass(`mode-${this.tradeMode}`);
+  }
+
+  loadStockAndHistory() {
+    U.ajax({
+      data:{ action:'puri_pos_get_stock_summary' },
+      success: r => { if(r.success) { this.stockData = r.data; this.renderStockTable(); } }
+    });
+	U.ajax({
+        data: { action: 'puri_pos_get_pool_history' },
+        success: r => {
+            if(r.success) {
+                this.historyData = r.data;
+                this.renderHistoryTable(); // Memanggil fungsi yang baru kita buat
             }
         }
-    },
-    error: function() {
-        $('#history_table tbody').html(`<tr>
-            <td colspan="4" style="text-align:center; color:red;">
-                <i class="fa-solid fa-exclamation-triangle"></i> Failed to load data
-            </td>
-        </tr>`);
-    }
+    });
+  }
+
+  renderStockTable() {
+    // Logic sorting (Tetap sama)
+    const html = this.stockData.map(s => `
+      <tr>
+        <td><strong>${s.name}</strong></td>
+        <td class="tr">${U.fmt(s.qty_end)}</td>
+        <td class="tr">${U.fmt(s.sar_end)}</td>
+      </tr>`).join('');
+    $('#stock_table tbody').html(html);
+  }
+
+  /* ---------------- CHECKOUT (Sinkron Mozart) ---------------- */
+  handleCheckout() {
+    if (!this.cart.length) return Swal.fire('Empty','Cart is empty','warning');
+    if (!this.currentCustomer) return Swal.fire('Customer','Select customer','error');
+
+    Swal.fire({
+      title: 'Confirm Transaction?',
+      text: `Total: ${$('#cart_total_idr').text()}`,
+      icon: 'question',
+      showCancelButton: true,
+      confirmButtonText: 'Process'
+    }).then(r => {
+      if(r.isConfirmed) this.processTransaction();
+    });
+  }
+
+  processTransaction() {
+    Swal.fire({ title:'Processing...', didOpen:()=>Swal.showLoading() });
+
+    const fd = new FormData();
+    fd.append('action', 'puri_pos_checkout');
+    fd.append('nonce',  '<?php echo wp_create_nonce("puri_pos_checkout"); ?>');
+    fd.append('cart',   JSON.stringify(this.cart)); // Sekarang isinya key Mozart
+    fd.append('trade_mode', this.tradeMode);
+    fd.append('cust_id',    this.currentCustomer.id);
+    fd.append('payment_method', this.$payMethod.val()); // Kirim ID Akun (Kas/Bank)
+
+    U.ajax({
+      type: 'POST',
+      data: fd,
+      processData: false,
+      contentType: false,
+      success: r => {
+        if(r.success) {
+          Swal.fire('Success', 'Ref: ' + r.data.ref_id, 'success');
+          this.cart = [];
+          this.unlockSession();
+          this.renderCart();
+          this.loadStockAndHistory(); // Refresh stok real-time
+        } else {
+          Swal.fire('Failed', r.data, 'error');
+        }
+      }
+    });
+  }
+}
+
+// Global Export agar bisa diakses jika ada script luar (Optional)
+window.Cockpit = new CockpitPOS();
+
 });
+</script>
 
-                // Stock Card
-                $.ajax({
-                    url: ajaxurl,
-                    data: { action: 'puri_pos_get_stock_summary' },
-                    cache: false,
-                    success: function(res) {
-                        if (res.success) {
-                            Cockpit.stockData = res.data;
-                            renderStockTable();
-                        }
-                    }
-                });
-            }
 
-            /**
-             * ====================================================
-             * STOCK TABLE RENDERING
-             * ====================================================
-             */
-            function renderStockTable() {
-                // Sorting
-                Cockpit.stockData.sort((a, b) => {
-                    if (sortKey === 'name') {
-                        let denA = parseFloat(a.denom) || 0;
-                        let denB = parseFloat(b.denom) || 0;
-                        return sortAsc ? (denA - denB) : (denB - denA);
-                    }
-
-                    let valA = a[sortKey];
-                    let valB = b[sortKey];
-
-                    if (typeof valA === 'string') valA = valA.toLowerCase();
-                    if (typeof valB === 'string') valB = valB.toLowerCase();
-
-                    if (valA < valB) return sortAsc ? -1 : 1;
-                    if (valA > valB) return sortAsc ? 1 : -1;
-                    return 0;
-                });
-
-                // Update sort icons
-                $('.sortable-header th i').removeClass('fa-sort-up fa-sort-down').addClass('fa-sort');
-                $(`.sortable-header th[data-sort="${sortKey}"] i`)
-                    .removeClass('fa-sort')
-                    .addClass(sortAsc ? 'fa-sort-up' : 'fa-sort-down');
-
-                // Render rows
-                let html = '';
-                Cockpit.stockData.forEach(s => {
-                    let bgEnd = 'background:#e6f7ff; font-weight:bold;';
-                    let borderLeft = 'border-left:2px solid #eee;';
-                    let clsZero = 'color:#ccc;';
-
-                    html += `<tr>
-                        <td><strong>${s.name}</strong><br><small style="color:#888">${s.sku}</small></td>
-                        <td class="tr" style="${borderLeft} ${s.qty_start === 0 ? clsZero : ''}">${fmt(s.qty_start)}</td>
-                        <td class="tr text-red" style="${s.qty_out === 0 ? clsZero : ''}">${s.qty_out > 0 ? '-' + fmt(s.qty_out) : '0'}</td>
-                        <td class="tr text-green" style="${s.qty_in === 0 ? clsZero : ''}">${s.qty_in > 0 ? '+' + fmt(s.qty_in) : '0'}</td>
-                        <td class="tr" style="${bgEnd} ${s.qty_end === 0 ? clsZero : 'color:#000;'}">${fmt(s.qty_end)}</td>
-                        <td class="tr text-red" style="${borderLeft} ${s.sar_out === 0 ? clsZero : ''}">${fmt(s.sar_out)}</td>
-                        <td class="tr text-green" style="${s.sar_in === 0 ? clsZero : ''}">${fmt(s.sar_in)}</td>
-                        <td class="tr" style="${bgEnd} ${s.sar_end === 0 ? clsZero : 'color:#2271b1;'}">${fmt(s.sar_end)}</td>
-                    </tr>`;
-                });
-                $('#stock_table tbody').html(html);
-            }
-
-            /**
-             * ====================================================
-             * MODE GUARD (VISUAL INDICATOR)
-             * ====================================================
-             */
-            function applyModeGuard() {
-                const $panel = $('#panelInputTransaksi');
-                $panel.removeClass('mode-sell mode-buy');
-
-                if (tradeMode === 'sell') {
-                    $panel.addClass('mode-sell');
-                    $('#btn_add_cart').html('<i class="fa-solid fa-cart-plus"></i> Add to Cart (Sell)');
-                    $('#inp_qty, #inp_total_riyal').prop('disabled', false);
-                    $('#inp_rate').prop('readonly', true).val($('#base_rate_hidden').val())
-                        .addClass('bg-gray').removeClass('highlight-input');
-                } else {
-                    $panel.addClass('mode-buy');
-                    $('#btn_add_cart').html('<i class="fa-solid fa-cart-plus"></i> Add to Cart (Buy)');
-                    $('#inp_qty, #inp_total_riyal').prop('disabled', false);
-                    $('#inp_rate').prop('readonly', false).removeClass('bg-gray').addClass('highlight-input');
-                }
-                calcFinalIDR();
-            }
-
-            // Initialize on page load
-            init();
-        });
-        </script>
 
         <?php
     }
@@ -1981,9 +1229,18 @@ $.ajax({
         return $results;
     }
 
+	private function reverse_physical_stock($item_id, $qty) {
+		// Jika qty di pool adalah -5 (jual), maka untuk mengembalikan harus di +5
+		// Jika qty di pool adalah 5 (beli), maka untuk mengembalikan harus di -5
+		$reverse_qty = $qty * -1; 
+		return $this->update_physical_stock($item_id, $reverse_qty, 'adjust'); 
+	}
+
+
     /**
      * AJAX: Create New Customer
      */
+	 
     public function ajax_create_customer() {
         check_ajax_referer('puri_pos_create_customer', 'nonce');
         

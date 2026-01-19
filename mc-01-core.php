@@ -29,6 +29,7 @@ if (!defined('T_JOURNAL')) define('T_JOURNAL', 'puri_acct_journal');
 if (!defined('T_CONSIGN')) define('T_CONSIGN', 'puri_inventory_consign'); // untuk mc-09
 if (!defined('T_LOCKS'))   define('T_LOCKS',   'puri_inventory_locks'); 
 if (!defined('T_ORDERS'))  define('T_ORDERS',  'puri_orders'); // untuk mc-07
+if (!defined('T_JSON'))    define('T_JSON',    'puri_json_storage'); // untuk mc-03 
 // ============================================================================
 // POOL TRANSACTION TABLES (v6.10.25 - Phase 1)
 // ============================================================================
@@ -133,6 +134,7 @@ function puri_core_db_install() {
     $stock_table  = puri_table_name('T_STOCK');
     $locks_table  = puri_table_name('T_LOCKS');
     $chart_table  = puri_table_name('T_CHART');
+	$json_table   = puri_table_name('T_JSON');
 
     // SQL definitions (dbDelta friendly)
     $sql_items = "CREATE TABLE IF NOT EXISTS {$items_table} (
@@ -183,6 +185,17 @@ function puri_core_db_install() {
 		last_updated datetime DEFAULT NULL,
         PRIMARY KEY (id),
         UNIQUE KEY loc_item (location_id, item_id)
+    ) $collate;";
+
+
+    $sql_json = "CREATE TABLE IF NOT EXISTS {$json_table} (
+        id bigint(20) NOT NULL AUTO_INCREMENT,
+        ref_id varchar(50) NOT NULL,
+        source_module varchar(30) NOT NULL,
+        snapshot_json longtext,
+        created_at datetime DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (id),
+        UNIQUE KEY uniq_ref (ref_id)
     ) $collate;";
 
     $sql_locks = "CREATE TABLE IF NOT EXISTS {$locks_table} (
@@ -300,6 +313,8 @@ dbDelta($sql_eod_batches);
     dbDelta($sql_stock);
     dbDelta($sql_locks);
     dbDelta($sql_chart);
+    dbDelta($sql_json);
+
 
     // Auto-seed CoA
     puri_seed_coa();
