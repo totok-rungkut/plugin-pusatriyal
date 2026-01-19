@@ -1,7 +1,7 @@
 <?php
 /**
  * MC 04 - PROCUREMENT HUB (STABLE HYBRID - PATCH 7.3.9)
- * UI/UX: 7.3.12 | Processor: Mozart Core
+ * UI/UX: 7.3.14 | Processor: Mozart Core
  * Fix: Database Column & Missing Function Journal
  */
 
@@ -233,13 +233,13 @@ function updateTotals() {
             const row = document.createElement('div');
             row.className = 'proc-row item-row';
 			
-// Tentukan tabindex berdasarkan mode
+  // Tentukan tabindex berdasarkan mode
 	// SKU selalu 1, Kurs selalu 3, Total IDR selalu 5
 	const tiSAR = (mode === 'nominal') ? 2 : 4;
 	const tiQTY = (mode === 'nominal') ? 4 : 2;			
 			
-row.innerHTML = `
-                <div style="order:1"><select name="items[${idx}][id]" required tabindex="1"><option value="">- Item -</option>${items.map(i=>`<option value="${i.wp_post_id}" data-denom="${i.denom_value}">${i.sku}</option>`).join('')}</select></div>
+    row.innerHTML = `
+                <div style="order:1"><select name="items[${idx}][item_id]" required tabindex="1"><option value="">- Item -</option>${items.map(i=>`<option value="${i.wp_post_id}" data-denom="${i.denom_value}">${i.sku}</option>`).join('')}</select></div>
                 <div class="c2" style="order:2"><input type="text" name="items[${idx}][total_riyal]" class="sar-in" tabindex="${tiSAR}"></div>
                 <div style="order:3"><input type="text" name="items[${idx}][kurs]" class="ks-in" tabindex="3"></div>
                 <div class="c4" style="order:4"><input type="text" name="items[${idx}][qty]" class="qty-in" tabindex="${tiQTY}"></div>
@@ -371,111 +371,169 @@ ${banks.map(b => `<option value="${b.code}" data-bal="${b.live_balance || 0}">${
         document.getElementById('confirm_data').onchange = updateTotals;
         buildRow();
     })();
-    </script>
+	
+</script>
+
 <?php
 }
 
 // -----------------------------------------------------------------------------
 // POST HANDLER - MOZART BRIDGE (RESULT 6.6.12 COMPATIBLE)
 // -----------------------------------------------------------------------------
+/**
+ * HANDLER: MC-04 PROCUREMENT HUB (Mozart Bridge)
+ * Version: 7.3.14 (Stable Hybrid)
+ * Logic: Cash-Based System, Single Source of Truth
+ */
 add_action('admin_post_puri_procure_submit', function() {
-    check_admin_referer('puri_procure_action', 'puri_procure_nonce');
+    puri_check_cap('manage_options');
+	
+	if (!isset($_POST['puri_procure_nonce']) || !wp_verify_nonce($_POST['puri_procure_nonce'], 'puri_procure_action')) {
+        wp_die("Sesi kedaluwarsa atau akses tidak sah. Silakan refresh halaman.");
+    }
+	
     global $wpdb;
 
-    $wpdb->query('START TRANSACTION');
+    // 1. DATA GATHERING (Identitas Partner & Referensi)
+    $vendor_id   = intval($_POST['vendor_id']);
+    $vendor_post = get_post($vendor_id);
+    $vendor_name = $vendor_post ? $vendor_post->post_title : 'Unknown Vendor';
+    $vendor_code = get_post_meta($vendor_id, 'vendor_code', true) ?: 'VND-' . $vendor_id;
+	$location_id = sanitize_text_field($_POST['location_id'] ?? 'MAIN');
+    
+    $description = sanitize_text_field($_POST['description'] ?? '');
+    $items_raw   = $_POST['items'] ?? [];
+    $pays_raw    = $_POST['payments'] ?? [];
+    
+    // Referensi Unik Transaksi
+    $source_ref  = 'PRO-' . current_time('Ymd') . '-' . strtoupper(wp_generate_password(3, false));
+
     try {
-        $ref = 'PRO-' . strtoupper(wp_generate_password(6, false));
-        $items = $_POST['items'] ?? [];
-        $pays = $_POST['payments'] ?? [];
-        $vendor_id = intval($_POST['vendor_id']);
-        $v_name = get_the_title($vendor_id) ?: 'Vendor #'.$vendor_id;
+        if (empty($items_raw)) throw new Exception("Daftar item tidak boleh kosong.");
 
-        $total_idr = 0;
-        $items_desc_list = [];
+        $total_belanja_idr = 0;
+        $items_for_engine  = []; // Menjadi sumber tunggal data item (Logic & Audit)
 
-        foreach ($items as $it) {
-            $qty = floatval(str_replace('.', '', $it['qty']));
-            $kurs = floatval(str_replace('.', '', $it['kurs']));
-            $sar = floatval(str_replace('.', '', $it['total_riyal']));
+        // 2. LOOPING & DATA ENRICHMENT (Menyusun Nampan Matang untuk Mozart)
+        foreach ($items_raw as $it) {
+            $item_id     = intval($it['item_id']);
+            // Pembersihan karakter non-numeric jika ada formatting ribuan dari JS
+            $qty         = floatval(str_replace(',', '', $it['qty'])); 
+            $kurs        = floatval(str_replace(',', '', $it['kurs']));
+            $total_valas = floatval(str_replace(',', '', $it['total_riyal'])); 
             
-            if ($qty <= 0) continue;
+            if ($qty <= 0 && $total_valas <= 0) continue;
 
-            $sql_id = puri_get_item_sql_id($it['id']);
-            $it_info = $wpdb->get_row($wpdb->prepare("SELECT sku, denom_value FROM " . puri_table_name('T_ITEMS') . " WHERE id = %d", $sql_id));
+            // AMBIL INFO ITEM: Agar Mozart bisa meledakkan (explode) SKU untuk deskripsi jurnal
+            $it_info = $wpdb->get_row($wpdb->prepare(
+                "SELECT sku, denom_value, name FROM ".puri_table_name('T_ITEMS')." WHERE id = %d", 
+                $item_id
+            ));
+            
+            $sku   = $it_info ? $it_info->sku : 'SKU-'.$item_id;
+            $denom = $it_info ? $it_info->denom_value : 1;
+            $name  = $it_info ? $it_info->name : 'Unknown Item';
 
-            if (!$it_info) throw new Exception("Item dengan ID {$it['id']} tidak ditemukan.");
+            // KALKULASI: Total IDR adalah Volume Uang (Valas) x Kurs
+            $subtotal_idr = $total_valas * $kurs;
+            $total_belanja_idr += $subtotal_idr;
 
-            $subtotal = $sar * $kurs;
-            $total_idr += $subtotal;
-
-            // Simpan deskripsi untuk jurnal gabungan di akhir
-            $items_desc_list[] = sprintf('%s (%s riyal @%s)', 
-                $it_info->sku, 
-                number_format($sar, 0, ',', '.'), 
-                number_format($kurs, 0, ',', '.')
-            );
-
-            /**
-             * EKSEKUSI MOZART (MC-03)
-             * Mozart akan otomatis:
-             * 1. Update Stock di T_STOCK via mc-03b
-             * 2. Hitung Moving Average (HPP) via mc-03b
-             * 3. Catat Kartu Stok di T_LEDGER via mc-03a
-             * 4. Catat Jurnal DEBIT (1401) via mc-03c
-             */
-            $res = puri_mozart()->execute('procurement', [
-                'item_id'     => $sql_id,
-                'qty'         => $qty,
-                'unit_price'  => $kurs, // Digunakan Mozart untuk hitung Moving Average
-                'ref_id'      => $ref,
-                'location_id' => 'gudang_utama',
-                'description' => "Kulakan dari {$v_name} | {$it_info->sku} @{$kurs}"
-            ]);
-
-            if (is_wp_error($res)) throw new Exception("Mozart Error: " . $res->get_error_message());
+            // Masukkan ke array tunggal (Items Engine)
+            $items_for_engine[] = [
+                'item_id'     => $item_id,
+                'sku'         => $sku,
+                'name'        => $name,
+                'denom'       => $denom,
+                'qty'         => $qty,          // Lembaran Fisik
+                'total_valas' => $total_valas,  // Volume Uang
+                'unit_price'  => $kurs,         // Kurs Beli (Basis HPP)
+                'subtotal_idr'=> $subtotal_idr
+            ];
         }
 
-        // 2. JURNAL PEMBAYARAN (KREDIT)
-        // Gabungkan rincian item ke dalam deskripsi pembayaran agar informatif
-        $full_journal_desc = "Pembayaran Kulakan {$v_name} : " . implode(' ; ', $items_desc_list);
+        // 3. PAYMENTS GATHERING (Verifikasi Cash-Based)
+        $total_pembayaran = 0;
+        $payments_for_engine = [];
+        foreach ($pays_raw as $p) {
+            $amount = floatval(str_replace(',', '', $p['amount']));
+            if ($amount <= 0) continue;
 
-        foreach ($pays as $p) {
-            $amt = floatval(str_replace('.', '', $p['amount']));
-            if ($amt > 0) {
-                // Kita masukkan sisi kredit secara manual karena Mozart fokus pada inventory per-item
-                $wpdb->insert(puri_table_name('T_JOURNAL'), [
-                    'trx_date'     => current_time('mysql'),
-                    'ref_id'       => $ref,
-                    'account_code' => sanitize_text_field($p['account']),
-                    'debit'        => 0,
-                    'credit'       => $amt,
-                    'description'  => $full_journal_desc
-                ]);
-            }
+            $total_pembayaran += $amount;
+            $payments_for_engine[] = [
+                'account_code' => sanitize_text_field($p['account']),
+                'amount'       => $amount
+            ];
         }
 
-        $wpdb->query('COMMIT');
-        wp_redirect(admin_url('admin.php?page=puri-procurement&puri_procure_ok=' . urlencode($ref)));
+        // VALIDASI AKHIR: Harus Balance (Hanya Cash-Base, Tidak Boleh Ada Hutang)
+        if (abs($total_belanja_idr - $total_pembayaran) > 0.01) {
+            throw new Exception("Transaksi tidak balance! Belanja: ".number_format($total_belanja_idr).", Pembayaran: ".number_format($total_pembayaran));
+        }
+
+        // 4. BUNDLING TRX_PARAM GENERIK (Format Baku untuk Mozart MC-03)
+        $trx_param = [
+            'source'            => 'procurement',
+            'source_ref'        => $source_ref,
+            'counterparty_id'   => $vendor_code,
+            'counterparty_name' => $vendor_name,
+            'total_idr'         => $total_belanja_idr,
+            'description'       => $description,
+			'location_id'       => $location_id, 
+            'created_at'        => current_time('mysql'),
+            'created_by'        => get_current_user_id(),
+            'items'             => $items_for_engine,    // Mozart akan meracik deskripsi dari sini
+            'payments'          => $payments_for_engine, // Dasar penjurnalan sisi Credit (Cash/Bank)
+            'recalculate_hpp'   => true
+        ];
+
+        // 5. SNAPSHOT JSON (Membekukan seluruh trx_param sebagai Audit Trail)
+        $trx_param['snapshot_json'] = json_encode($trx_param);
+
+        // 6. DELIVERY TO MOZART (The Conductor)
+        // Mozart mengurus: DB Transaction, Stok, Ledger, & Jurnal matang via Accountant
+        $eng_ref = puri_mozart()->execute('procurement', $trx_param);
+
+        if (is_wp_error($eng_ref)) {
+            throw new Exception($eng_ref->get_error_message());
+        }
+
+        // 7. FINISH & REDIRECT
+        wp_redirect(admin_url('admin.php?page=puri-procurement&puri_procure_ok=' . urlencode($source_ref)));
+        exit;
+
     } catch (Exception $e) {
-        $wpdb->query('ROLLBACK');
-        wp_die("Gagal Memproses: " . $e->getMessage());
+        wp_die("Kesalahan Orkestrasi Mozart (MC-04): " . $e->getMessage());
     }
-    exit;
 });
 
 
-// AUTO-BRIDGE WP_ID TO SQL_ID
+// AUTO-BRIDGE WP_ID TO SQL_ID (REVISED v7.3.14)
 if (!function_exists('puri_get_item_sql_id')) {
     function puri_get_item_sql_id($wp_id) {
-        global $wpdb; $t = puri_table_name('T_ITEMS');
+        global $wpdb; 
+        $t = puri_table_name('T_ITEMS');
+        
+        // 1. Coba cari ID yang sudah ada
         $id = $wpdb->get_var($wpdb->prepare("SELECT id FROM $t WHERE wp_post_id = %d", $wp_id));
+        
+        // 2. Jika tidak ada, jangan asal INSERT. 
+        // Dilema: Jika dipaksa INSERT, metadata (denom, sku) mungkin belum siap di WP.
         if (!$id) {
+            $sku   = get_post_meta($wp_id, 'item_sku_code', true) ?: 'SKU-'.$wp_id;
+            $denom = get_post_meta($wp_id, 'denom_value', true) ?: 1;
+            $name  = get_the_title($wp_id);
+
             $wpdb->insert($t, [
-                'wp_post_id' => $wp_id, 'sku' => get_post_meta($wp_id, 'item_sku_code', true) ?: 'SKU-'.$wp_id,
-                'name' => get_the_title($wp_id), 'type' => 'currency', 'denom_value' => get_post_meta($wp_id, 'denom_value', true) ?: 1
+                'wp_post_id'  => $wp_id, 
+                'sku'         => $sku,
+                'name'        => $name, 
+                'type'        => 'currency', 
+                'denom_value' => $denom,
+                'created_at'  => current_time('mysql')
             ]);
             $id = $wpdb->insert_id;
         }
+        
         return $id;
     }
 }

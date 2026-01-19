@@ -1,8 +1,16 @@
 <?php
 /**
- * MC-03B - STOCK & VALUATION (LITE SCALABLE)
- * @version 7.3.9
- * Logic: Base_price as Global HPP | Cost_avg as Reserved/Mirror
+ * =============================================================================
+ * MC-03b - PURI Stock Controller (Mozart Bridge)
+ * =============================================================================
+ * @package     Pusat Riyal
+ * @version     7.3.14
+ * @author      Mozart Engine Core
+ * * Responsibilities:
+ * - Update saldo fisik (qty) di tabel T_STOCK (puri_inventory_balance).
+ * - Mendukung multi-item dalam satu transaksi (nampan MC-04).
+ * - Update kolom 'last_ref' dan 'updated_at' untuk jejak audit fisik.
+ * =============================================================================
  */
 
 defined('ABSPATH') || exit;
@@ -10,55 +18,72 @@ defined('ABSPATH') || exit;
 if (!class_exists('PURI_Stock_Controller_V7')) {
     class PURI_Stock_Controller_V7 {
 
-        public function update_balance($action, $p) {
+        /**
+         * Update Balance Fisik
+         * Dipanggil oleh Mozart::execute()
+         */
+        public function update_balance($action_type, $params) {
             global $wpdb;
-            $tbl_stock = puri_table_name('T_STOCK');
-            $tbl_items = puri_table_name('T_ITEMS');
+            $table_stock = puri_table_name('T_STOCK'); // Sinkron MC-01: puri_inventory_balance
+			$loc_id      = $params['location_id'] ?? 'MAIN'; // Fallback ke MAIN	
+			
+            if (empty($params['items'])) {
+                throw new Exception("Stocker: trx_param items kosong.");
+            }
 
-            $item_id  = intval($p['item_id']);
-            $new_qty  = floatval($p['qty']);
-            // Fallback location: Procurement -> Gudang | Others -> Laci
-            $location = $p['location_id'] ?? (($action === 'procurement') ? 'gudang_utama' : 'laci_kasir');
+            foreach ($params['items'] as $it) {
+                $item_id = intval($it['item_id']);
+                $qty_change = floatval($it['qty']); // Lembaran fisik
 
-            // 1. UPDATE STOK (Kolom 'qty')
-            $wpdb->query($wpdb->prepare(
-                "INSERT INTO {$tbl_stock} (item_id, location_id, qty, last_updated) 
-                 VALUES (%d, %s, %f, NOW()) 
-                 ON DUPLICATE KEY UPDATE qty = qty + %f, last_updated = NOW()",
-                $item_id, $location, $new_qty, $new_qty
-            ));
+                if ($qty_change == 0) continue;
 
-            // 2. KALKULASI MOVING AVERAGE (Hanya di Procurement)
-            if ($action === 'procurement' && isset($p['unit_price'])) {
-                $buy_price = floatval($p['unit_price']);
+                // Tentukan arah stok berdasarkan action_type
+                // Procurement = Masuk (+), POS/Sales = Keluar (-)
+                if ($action_type === 'procurement') {
+                    $sql_op = "qty + %f";
+                } else {
+                    $sql_op = "qty - %f";
+                }
 
-                // Ambil data Global HPP & Total Stok Nasional
-                $data = $wpdb->get_row($wpdb->prepare(
-                    "SELECT i.base_price, SUM(s.qty) as total_stock 
-                     FROM {$tbl_items} i 
-                     LEFT JOIN {$tbl_stock} s ON i.id = s.item_id 
-                     WHERE i.id = %d GROUP BY i.id", $item_id
+                /**
+                 * UPSERT LOGIC (Update or Insert)
+                 * Kita cek apakah baris item_id sudah ada di puri_inventory_balance.
+                 */
+                $exists = $wpdb->get_var($wpdb->prepare(
+                    "SELECT id FROM {$table_stock} WHERE item_id = %d", 
+                    $item_id
                 ));
 
-                $old_hpp = floatval($data->base_price ?? 0);
-                $stock_after = floatval($data->total_stock ?? 0);
-                
-                // Hitung stok sebelum transaksi ini (karena INSERT sudah jalan di atas)
-                $stock_before = max(0, $stock_after - $new_qty);
+                if ($exists) {
+                    // UPDATE: Tambah/Kurang saldo yang ada
+                    $wpdb->query($wpdb->prepare(
+                        "UPDATE {$table_stock} 
+                         SET qty = {$sql_op}, 
+                             last_ref = %s, 
+                             updated_at = %s 
+                         WHERE item_id = %d",
+                        $qty_change,
+                        $params['source_ref'],
+                        $params['created_at'],
+                        $item_id
+                    ));
+                } else {
+                    // INSERT: Buat baris baru jika item belum pernah ada saldo
+                    $wpdb->insert($table_stock, [
+                        'item_id'    => $item_id,
+                        'qty'        => ($action_type === 'procurement' ? $qty_change : -$qty_change),
+                        'last_ref'   => $params['source_ref'],
+                        'updated_at' => $params['created_at']
+                    ]);
+                }
 
-                // Rumus: (Nilai Stok Lama + Nilai Beli Baru) / Total Stok Baru
-                $total_value = ($stock_before * $old_hpp) + ($new_qty * $buy_price);
-                $new_hpp = ($stock_after > 0) ? ($total_value / $stock_after) : $buy_price;
-
-                // 3. SINKRONISASI (Update Master & Mirror ke Stock)
-                $wpdb->update($tbl_items, ['base_price' => $new_hpp], ['id' => $item_id]);
-                
-                // Mirror ke cost_avg agar jika nanti scalable, datanya tidak kosong
-                $wpdb->update($tbl_stock, ['cost_avg' => $new_hpp], [
-                    'item_id' => $item_id, 
-                    'location_id' => $location
-                ]);
+                // Cek jika terjadi error database
+                if ($wpdb->last_error) {
+                    throw new Exception("Stocker Database Error: " . $wpdb->last_error);
+                }
             }
+
+            return true;
         }
     }
 }
