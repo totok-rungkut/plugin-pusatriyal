@@ -414,14 +414,23 @@ add_action('admin_post_puri_procure_submit', function() {
         $total_belanja_idr = 0;
         $items_for_engine  = []; // Menjadi sumber tunggal data item (Logic & Audit)
 
+		// Helper function lokal untuk membersihkan angka (Ribuan Titik/Koma)
+			$clean_num = function($val) {
+			if (is_array($val)) return 0;
+			// Hapus titik ribuan, ganti koma desimal menjadi titik jika ada
+			$v = str_replace('.', '', $val); 
+			$v = str_replace(',', '.', $v); 
+			return floatval($v);
+		};
+
         // 2. LOOPING & DATA ENRICHMENT (Menyusun Nampan Matang untuk Mozart)
         foreach ($items_raw as $it) {
             $item_id     = intval($it['item_id']);
             // Pembersihan karakter non-numeric jika ada formatting ribuan dari JS
-            $qty         = floatval(str_replace(',', '', $it['qty'])); 
-            $kurs        = floatval(str_replace(',', '', $it['kurs']));
-            $total_valas = floatval(str_replace(',', '', $it['total_riyal'])); 
-            
+			$qty         = $clean_num($it['qty']); 
+			$kurs        = $clean_num($it['kurs']);
+			$total_valas = $clean_num($it['total_riyal']);            
+
             if ($qty <= 0 && $total_valas <= 0) continue;
 
             // AMBIL INFO ITEM: Agar Mozart bisa meledakkan (explode) SKU untuk deskripsi jurnal
@@ -455,7 +464,7 @@ add_action('admin_post_puri_procure_submit', function() {
         $total_pembayaran = 0;
         $payments_for_engine = [];
         foreach ($pays_raw as $p) {
-            $amount = floatval(str_replace(',', '', $p['amount']));
+			$amount = $clean_num($p['amount']);
             if ($amount <= 0) continue;
 
             $total_pembayaran += $amount;
@@ -487,6 +496,10 @@ add_action('admin_post_puri_procure_submit', function() {
         ];
 
         // 5. SNAPSHOT JSON (Membekukan seluruh trx_param sebagai Audit Trail)
+		if (abs($total_belanja_idr - $total_pembayaran) > 0.1) {
+             throw new Exception("Transaksi tidak balance! Belanja: " . number_format($total_belanja_idr) . ", Pembayaran: " . number_format($total_pembayaran));
+        }
+		
         $trx_param['snapshot_json'] = json_encode($trx_param);
 
         // 6. DELIVERY TO MOZART (The Conductor)
@@ -498,7 +511,7 @@ add_action('admin_post_puri_procure_submit', function() {
         }
 
         // 7. FINISH & REDIRECT
-        wp_redirect(admin_url('admin.php?page=puri-procurement&puri_procure_ok=' . urlencode($source_ref)));
+        wp_safe_redirect(admin_url('admin.php?page=puri-procurement&puri_procure_ok=' . urlencode($source_ref)));
         exit;
 
     } catch (Exception $e) {
