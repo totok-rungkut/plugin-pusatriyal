@@ -15,19 +15,25 @@ function puri_render_procurement_page() {
     $items_table = puri_table_name('T_ITEMS');
     $items = $wpdb->get_results("SELECT id, wp_post_id, sku, name, denom_value FROM {$items_table} WHERE type = 'currency' ORDER BY denom_value ASC");
     $vendors = get_posts(['post_type' => 'pr_vendor', 'posts_per_page' => -1, 'post_status' => 'publish']);
+	$locations = get_option('puri_inv_locations', [['id' => 'gudang-00', 'name' => 'Gudang Utama'] ]);  // Ambil data lokasi dari setting MC-29 (wp_options)
     //$banks = $wpdb->get_results("SELECT code, name FROM " . puri_table_name('T_CHART') . " WHERE is_cash = 1 ORDER BY code ASC");
+	
 // PATCH: Ambil Nama dan Saldo Akhir akun Kas/Bank
+
+// PATCH: Hitung saldo = saldo_awal (T_CHART.balance) + mutasi (SUM debit-credit dari T_JOURNAL)
 $banks = $wpdb->get_results("
-SELECT 
-        c.code, 
-        c.name, 
-        ROUND(
-            COALESCE(c.balance, 0) + 
-            COALESCE((SELECT SUM(debit - credit) FROM " . puri_table_name('T_JOURNAL') . " WHERE account_code = c.code), 0), 
-            2
-        ) as live_balance
-    FROM " . puri_table_name('T_CHART') . " c 
-    WHERE c.is_cash = 1 
+    SELECT c.code, c.name,
+           ROUND(
+               COALESCE(c.balance, 0) +
+               COALESCE(j.mutasi, 0), 2
+           ) AS live_balance
+    FROM " . puri_table_name('T_CHART') . " c
+    LEFT JOIN (
+        SELECT account_code, SUM(debit - credit) AS mutasi
+        FROM " . puri_table_name('T_JOURNAL') . "
+        GROUP BY account_code
+    ) j ON j.account_code = c.code
+    WHERE c.is_cash = 1
     ORDER BY c.code ASC
 ");
 
@@ -36,20 +42,20 @@ SELECT
 
     <style>
         /* CSS STABLE v6.6.12 */
-        .proc-container { display: grid; grid-template-columns: 220px 1fr 350px; gap: 20px; margin-top: 20px; }
+        .proc-container { display: grid; grid-template-columns: 220px 1fr 400px; gap: 20px; margin-top: 20px; }
         .proc-panel { background: #fff; border: 1px solid #d1d5db; border-radius: 8px; padding: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
         .proc-listbox { width: 100%; height: 450px; border: 1px solid #cbd5e1; border-radius: 4px; }
         .proc-tabs { display: flex; gap: 5px; margin-bottom: 15px; background: #f1f5f9; padding: 5px; border-radius: 6px; }
         .proc-tab { flex: 1; padding: 10px; border: none; cursor: pointer; border-radius: 4px; font-weight: bold; color: #64748b; }
-        .proc-tab.active { background: #0ea5e9; color: #fff; }
         
+        .proc-tab.active { background: #0ea5e9; color: #fff; }
         .proc-header { display: grid; grid-template-columns: 140px 120px 100px 110px 140px 40px; gap: 10px; font-weight: bold; padding: 10px; background: #f8fafc; }
         .proc-row { display: grid; grid-template-columns: 140px 120px 100px 110px 140px 40px; gap: 10px; align-items: center; margin-bottom: 10px; }
         
         .proc-row input, .proc-row select { padding: 8px; border: 1px solid #cbd5e1; border-radius: 4px; width: 100%; text-align: right; }
 		.proc-row select { text-align: left; }
         .proc-row .readonly { background: #f1f5f9; color: #475569; font-weight: bold; }
-        .btn-submit { width: 100%; padding: 15px; background: #059669; color: #fff; border: none; border-radius: 6px; font-weight: 900; cursor: pointer; }
+        .btn-submit { width: 60%; padding: 15px; background: #059669; color: #fff; border: none; border-radius: 6px; font-size: bigger; font-weight: 700; cursor: pointer; margin-left:auto;}
 		
 .parent {display:flex;flex-direction:column;min-height:99%; gap:4px;}
 .parent h3 {height:40px;margin:0;font-size:28px;text-align:center;}
@@ -102,12 +108,35 @@ SELECT
                     <div id="proc_rows" style="margin-top: 15px;"></div>
                     <button type="button" id="btn_add_row" class="button">+ Tambah Baris</button>
 
-                    <div style="margin-top:30px; font-size: 20px; font-weight: 900; border-top: 2px solid #0ea5e9; padding-top:10px;">
-                        TOTAL: <span id="total_pembelian">Rp 0</span>
-                    </div>
-                    <br>
-                    <input type="checkbox" id="confirm_data"> <label>Data sudah benar</label>
-                    <button type="submit" id="btn_submit" class="btn-submit" disabled>SUBMIT PEMBELIAN</button>
+<hr>
+<div style="margin-top:5px; font-size: 22px; font-weight: 500; padding:10px 15px;text-align:right;">
+    TOTAL: <span id="total_pembelian" style="font-weight: 300;">Rp 0</span>
+</div>
+<hr>
+
+<div style="display: flex; align-items: center; gap: 15px; margin-bottom: 15px; background: #f0f9ff; padding: 10px; border-radius: 6px; border: 1px solid #bae6fd; margin-top: 35px;">
+    <div>
+        <label style="font-weight: bold; font-size: 12px; display: block; margin-bottom: 4px;">📍 Lokasi Simpan:</label>
+        <select name="location_id" id="location_id" style="padding: 5px; border-radius: 4px; border: 1px solid #cbd5e1; background: #f1f5f9; cursor: not-allowed;">
+            <?php foreach ($locations as $loc): ?>
+                <option value="<?php echo esc_attr($loc['id']); ?>" <?php selected($loc['id'], 'gudang-00'); ?>>
+                    <?php echo esc_html($loc['name']); ?>
+                </option>
+            <?php endforeach; ?>
+        </select>
+    </div>
+    <div style="margin-top: 18px;">
+        <input type="checkbox" id="confirm_data"> <label for="confirm_data" style="font-weight: 600;">Data sudah benar</label>
+    </div>
+	<button type="submit" id="btn_submit" class="btn-submit" disabled>SUBMIT PEMBELIAN  <i data-lucide="send" style="width: 16px; height: 16px; margin-left: 15px;"></i>  </button>
+
+</div>
+
+
+
+
+
+
                 </div>
 
                 <div class="proc-panel">
@@ -171,17 +200,44 @@ const fmt = (n) => new Intl.NumberFormat('id-ID', {
     maximumFractionDigits: 2
 }).format(n || 0);
  
-        const cln = (v) => parseFloat(String(v).replace(/\./g, '').replace(',', '.') || 0);
+// PATCH: Cleaner angka sesuai format Indonesia
+const clnInput = (v) => {
+    if (!v) return 0;
+    return parseFloat(
+        String(v).replace(/\./g, '').replace(',', '.')
+    ) || 0;
+};
+
+
+
+
+// PATCH: Cleaner angka, aman untuk angka mentah dari DB
+const clnRaw = (v) => {
+    if (!v) return 0;
+    if (typeof v === 'number') return v; // kalau sudah angka, langsung pakai
+    let s = String(v).trim();
+
+    // Jika string sudah dalam format mentah (punya titik desimal, tanpa ribuan)
+    if (/^\d+(\.\d+)?$/.test(s)) {
+        return parseFloat(s);
+    }
+
+    // Jika format Indonesia (ribuan titik, desimal koma)
+    return parseFloat(
+        s.replace(/\./g, '')   // hapus titik ribuan
+         .replace(',', '.')    // ganti koma desimal jadi titik
+    ) || 0;
+};
 
 function updateTotals() {
-            let bel = 0; document.querySelectorAll('.item-row .col-idr-val').forEach(i => bel += cln(i.value));
+            let bel = 0; document.querySelectorAll('.item-row .col-idr-val').forEach(i => bel += clnInput(i.value));
             let bay = 0; 
 
             document.querySelectorAll('#payment_rows > div').forEach(row => {
                 const sel = row.querySelector('.pay-acc');
                 const amtInput = row.querySelector('.pay-amt');
-                const amtVal = cln(amtInput.value);
-                const balLimit = cln(sel.selectedOptions[0]?.dataset.bal || 0);
+                const amtVal = clnInput(amtInput.value);
+                const balLimit = clnInput(sel.selectedOptions[0]?.dataset.bal || 0);
                 
                 bay += amtVal;
 
@@ -250,16 +306,16 @@ function updateTotals() {
             const sel = row.querySelector('select'), sar = row.querySelector('.sar-in'), ks = row.querySelector('.ks-in'), qty = row.querySelector('.qty-in'), idr = row.querySelector('.col-idr-val');
 
             function sync() {
-                const den = cln(sel.selectedOptions[0]?.dataset.denom || 1), kurs = cln(ks.value);
+                const den = clnInput(sel.selectedOptions[0]?.dataset.denom || 1), kurs = clnInput(ks.value);
                 if (mode === 'nominal') {
-                    const s = cln(sar.value); qty.value = fmt(s / den); idr.value = fmt(s * kurs);
+                    const s = clnInput(sar.value); qty.value = fmt(s / den); idr.value = fmt(s * kurs);
                 } else {
-                    const q = cln(qty.value); sar.value = fmt(q * den); idr.value = fmt(q * den * kurs);
+                    const q = clnInput(qty.value); sar.value = fmt(q * den); idr.value = fmt(q * den * kurs);
                 }
                 updateTotals();
             }
 
-            [sar, ks, qty].forEach(el => el.oninput = function() { if(el !== ks) this.value = fmt(cln(this.value)); sync(); });
+            [sar, ks, qty].forEach(el => el.oninput = function() { if(el !== ks) this.value = fmt(clnInput(this.value)); sync(); });
             sel.onchange = sync;
             row.querySelector('.btn-remove').onclick = () => { row.remove(); updateTotals(); updateModeLock(); };
             document.getElementById('proc_rows').appendChild(row);
@@ -274,8 +330,8 @@ function updateModeLock() {
     // Logic: Jika tidak ada baris, hasData otomatis false
     const hasData = Array.from(rows).some(row => {
         const sel = row.querySelector('select').value;
-        const valas = cln(row.querySelector('.sar-in').value);
-        const qty = cln(row.querySelector('.qty-in').value);
+        const valas = clnInput(row.querySelector('.sar-in').value);
+        const qty = clnInput(row.querySelector('.qty-in').value);
         return sel !== "" || valas > 0 || qty > 0;
     });
 
@@ -353,12 +409,12 @@ ${banks.map(b => `<option value="${b.code}" data-bal="${b.live_balance || 0}">${
 	// Event saat pilih Akun (Tampilkan Saldo)
 	sel.onchange = function() {
 		const opt = this.selectedOptions[0];
-		const bal = cln(opt.dataset.bal);
+		const bal = clnRaw(opt.dataset.bal);
 		document.getElementById('info_balance').innerHTML = `Saldo <b>${opt.text}</b>: <span style="color:${bal < 0 ? 'red' : 'green'}">Rp ${fmt(bal)}</span>`;
 		updateTotals();
 	};
 
-	amt.oninput = function() { this.value = fmt(cln(this.value)); updateTotals(); };
+	amt.oninput = function() { this.value = fmt(clnInput(this.value)); updateTotals(); };
 	div.querySelector('.btn-remove').onclick = () => { div.remove(); updateTotals(); };
 
 	document.getElementById('payment_rows').appendChild(div);
@@ -371,6 +427,10 @@ ${banks.map(b => `<option value="${b.code}" data-bal="${b.live_balance || 0}">${
         document.getElementById('confirm_data').onchange = updateTotals;
         buildRow();
     })();
+
+// activate font Lucide ------------------
+jQuery(document).ready(function($) { if (typeof lucide !== 'undefined') { lucide.createIcons(); } });
+
 	
 </script>
 

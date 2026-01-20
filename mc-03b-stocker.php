@@ -40,9 +40,9 @@ if (!class_exists('PURI_Stock_Controller_V7')) {
                 // Tentukan arah stok berdasarkan action_type
                 // Procurement = Masuk (+), POS/Sales = Keluar (-)
                 if ($action_type === 'procurement') {
-                    $sql_op = "qty + %f";
+                    $sql_op = "balance + %f";
                 } else {
-                    $sql_op = "qty - %f";
+                    $sql_op = "balance - %f";
                 }
 
                 /**

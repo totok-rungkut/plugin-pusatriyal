@@ -18,6 +18,8 @@ defined('ABSPATH') || exit;
 
 if (!defined('PURI_VERSION')) define('PURI_VERSION', '7.0.0');
 
+
+
 // --- HELPERS (Tetap dipertahankan dari v6.0.1) ---
 if (!function_exists('puri_check_cap')) {
     function puri_check_cap($cap = 'manage_options') {
@@ -178,6 +180,7 @@ add_action('restrict_manage_posts', function() {
     }
 });
 
+
 add_action('admin_init', function() {
     if (isset($_GET['puri_mass_sync']) && $_GET['puri_mass_sync'] === '1' && get_current_screen() && get_current_screen()->post_type === 'pr_item') {
         puri_check_cap('manage_options');
@@ -218,6 +221,36 @@ add_action('admin_init', function() {
     }
 });
 
+
+/**
+ * Enqueue Assets untuk Admin PURI
+ * Diletakkan di MC-00 sebagai Central UI Hub
+ */
+add_action('admin_enqueue_scripts', function($hook) {
+    // PROTEKSI: Hanya muat library jika kita berada di halaman plugin PURI
+    // (Semua menu Anda memiliki slug yang diawali dengan 'puri-')
+    if (strpos($hook, 'puri-') === false) {
+        return;
+    }
+
+    // 1. Muat Lucide Icons (CDN)
+    wp_enqueue_script(
+        'lucide-icons', 
+        'https://unpkg.com/lucide@latest', 
+        array(), 
+        null, 
+        true // taruh di footer agar tidak menghambat render
+    );
+
+    // 2. Muat FontAwesome (jika belum ada di modul lain)
+    wp_enqueue_style(
+        'font-awesome', 
+        'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css'
+    );
+    
+    // 3. Jika kelak Anda punya file CSS/JS lokal:
+    // wp_enqueue_style('puri-admin-custom', plugin_dir_url(__FILE__) . 'assets/admin-style.css');
+});
 
 /** ------------------------------------------------------------------------/
  * Sync-Guard Notification
