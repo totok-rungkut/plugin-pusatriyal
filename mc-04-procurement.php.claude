@@ -368,6 +368,7 @@ function puri_handle_procurement_submit() {
         $total_riyal = $total_riyal_input;
         $unit_price = ($denom > 0) ? ($kurs_input * $denom) : $kurs_input;
         $subtotal = $total_riyal * $kurs_input;
+		$loc_id = sanitize_text_field($_POST['location_id'] ?? puri_get_default_location());
         
         // Primary payment account
         $primary_payment_acc = isset($payments[0]['account']) ? $payments[0]['account'] : puri_gl('ap_trade');
@@ -379,7 +380,7 @@ function puri_handle_procurement_submit() {
             'unit_price'      => floatval($unit_price),
             'ref_no'          => sanitize_text_field($ref_id),
             'description'     => sanitize_text_field("Procurement: {$item_data->name} via {$vendor_name}"),
-            'location_id'     => 'gudang_utama',
+            'location_id'     => $loc_id;
             'payment_account' => sanitize_text_field($primary_payment_acc)
         ];
         

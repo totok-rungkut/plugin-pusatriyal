@@ -4,7 +4,7 @@
  * MC-29 - CONFIGURATION BASE (ULTIMATE EDITION)
  * ============================================================================
  * @package     Puri_Money_Changer
- * @version     3.1.0 (ES6 + Inventory Locations)
+ * @version     3.1.3 (ES6 + Inventory Locations)
  */
 
 defined('ABSPATH') || exit;
@@ -63,14 +63,15 @@ class Puri_Configuration_Base {
             $locs = $_POST['puri_inv_locations'] ?? [];
             $clean_locs = [];
             if (is_array($locs)) {
-                foreach ($locs as $loc) {
-                    if (!empty($loc['name'])) {
-                        $clean_locs[] = [
-                            'id'   => sanitize_title($loc['id']),
-                            'name' => sanitize_text_field($loc['name']),
-                        ];
-                    }
-                }
+foreach ($locs as $loc) {
+    $id = !empty($loc['id']) ? sanitize_title($loc['id']) : sanitize_title($loc['name']);
+    if (!empty($loc['name'])) {
+        $clean_locs[] = [
+            'id'   => $id,
+            'name' => sanitize_text_field($loc['name']),
+        ];
+    }
+}
             }
             update_option('puri_inv_locations', $clean_locs);
 
@@ -83,10 +84,7 @@ class Puri_Configuration_Base {
         $logo_id   = get_option('puri_comp_logo', '');
         $logo_url  = $logo_id ? wp_get_attachment_url($logo_id) : '';
         $banks     = get_option('puri_bank_accounts', []);
-$locations = get_option('puri_inv_locations', [
-['id' =>'gudang-00','name'=>'Gudang Utama'],
-['id' =>'kasir-01','name'=>'Kasir Ketintang']
-]);
+		$locations = get_option('puri_inv_locations', []);
 
         ?>
         <style>
@@ -179,19 +177,26 @@ $locations = get_option('puri_inv_locations', [
                                 <button type="button" class="button button-secondary" id="add-loc">Tambah Lokasi</button>
                             </div>
                             <div class="panel-body" id="location-repeater">
-                                <?php foreach ($locations as $index => $loc): ?>
-                                <div class="location-row">
-                                    <div style="flex:1">
-                                        <label style="font-size:11px">Slug ID (Readonly)</label>
-                                        <input type="text" name="puri_inv_locations[<?php echo $index; ?>][id]" class="puri-input" value="<?php echo esc_attr($loc['id']); ?>" readonly style="background:#f3f4f6">
-                                    </div>
-                                    <div style="flex:2">
-                                        <label style="font-size:11px">Nama Lokasi</label>
-                                        <input type="text" name="puri_inv_locations[<?php echo $index; ?>][name]" class="puri-input loc-name-field" value="<?php echo esc_attr($loc['name']); ?>">
-                                    </div>
-                                    <button type="button" class="remove-loc">❌</button>
-                                </div>
-                                <?php endforeach; ?>
+<?php foreach ($locations as $index => $loc): ?>
+<div class="location-row">
+  <div style="flex:2">
+    <label style="font-size:11px">Nama Lokasi</label>
+    <input type="text" name="puri_inv_locations[<?php echo $index; ?>][name]" 
+           class="puri-input loc-name-field" 
+           value="<?php echo esc_attr($loc['name']); ?>" 
+           placeholder="Nama Lokasi">
+  </div>
+  <div style="flex:1">
+    <label style="font-size:11px">Slug ID</label>
+    <input type="text" name="puri_inv_locations[<?php echo $index; ?>][id]" 
+           class="puri-input loc-id-field" 
+           value="<?php echo esc_attr($loc['id']); ?>" 
+           placeholder="slug-id">
+  </div>
+  <button type="button" class="remove-loc">❌</button>
+</div>
+<?php endforeach; ?>
+
                             </div>
                         </div>
 
@@ -293,12 +298,25 @@ $locations = get_option('puri_inv_locations', [
                     const idx = Date.now();
                     const html = `
                         <div class="location-row">
-                            <div style="flex:1"><input type="text" name="puri_inv_locations[${idx}][id]" class="puri-input loc-id-field" readonly style="background:#f3f4f6"></div>
                             <div style="flex:2"><input type="text" name="puri_inv_locations[${idx}][name]" class="puri-input loc-name-field" placeholder="Nama Lokasi Baru"></div>
+                            <div style="flex:1"><input type="text" name="puri_inv_locations[${idx}][id]" class="puri-input loc-id-field" style="background:#f0f0fc"></div>
                             <button type="button" class="remove-loc">❌</button>
                         </div>`;
                     $('#location-repeater').append(html);
                 });
+
+    // 👉 Di sini kamu taruh blok auto‑slug
+    $(document).on('input', '.loc-name-field', function() {
+        const slug = this.value.toLowerCase()
+            .replace(/[^a-z0-9 ]/g, '')
+            .replace(/\s+/g, '-');
+        const idField = $(this).closest('.location-row').find('.loc-id-field');
+        if (!idField.val()) { // hanya isi otomatis kalau kosong
+            idField.val(slug);
+        }
+    });
+
+    // Handler hapus lokasi
 
                 $(document).on('input', '.loc-name-field', function() {
                     const slug = this.value.toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, '-');

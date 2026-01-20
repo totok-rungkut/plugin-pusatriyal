@@ -322,6 +322,18 @@ dbDelta($sql_eod_batches);
 }
 add_action('admin_init', 'puri_core_db_install', 5);
 
+/*-------------------------------------------------------------
+* Helper sementara untuk default location_id = 'gudang-00'
+*
+-------------------------------------------------------------*/
+if (!function_exists('puri_get_default_location')) {
+    function puri_get_default_location() {
+        $locations = get_option('puri_inv_locations', [['id'=>'gudang-00','name'=>'Gudang Utama']]);
+        // Ambil lokasi pertama sebagai default
+        return $locations[0]['id'] ?? 'gudang-00';
+    }
+}
+
 /**
  * Auto-seeding Chart of Accounts (CoA)
  * Idempotent: uses REPLACE to avoid duplicates

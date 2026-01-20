@@ -25,7 +25,8 @@ if (!class_exists('PURI_Stock_Controller_V7')) {
         public function update_balance($action_type, $params) {
             global $wpdb;
             $table_stock = puri_table_name('T_STOCK'); // Sinkron MC-01: puri_inventory_balance
-			$loc_id      = $params['location_id'] ?? 'MAIN'; // Fallback ke MAIN	
+			//$loc_id      = $params['location_id'] ?? 'MAIN'; // Fallback ke MAIN	
+			$loc_id = $params['location_id'] ?? puri_get_default_location();
 			
             if (empty($params['items'])) {
                 throw new Exception("Stocker: trx_param items kosong.");
@@ -65,12 +66,15 @@ if (!class_exists('PURI_Stock_Controller_V7')) {
                         $qty_change,
                         $params['source_ref'],
                         $params['created_at'],
-                        $item_id
+                        $item_id,
+						$loc_id
+
                     ));
                 } else {
                     // INSERT: Buat baris baru jika item belum pernah ada saldo
                     $wpdb->insert($table_stock, [
                         'item_id'    => $item_id,
+						'location_id' => $loc_id,
                         'balance'        => ($action_type === 'procurement' ? $qty_change : -$qty_change),
                         'last_ref'   => $params['source_ref'],
                         'updated_at' => $params['created_at']
