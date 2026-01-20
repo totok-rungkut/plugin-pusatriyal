@@ -35,51 +35,43 @@ public function post_to_gl($action_type, $params) {
     $trx_date  = $params['created_at'] ?? current_time('mysql');
     $user      = get_current_user_id();
     $desc      = $this->compose_description($action_type, $params);
-
+    $is_buyback = $params['is_buyback'] ?? false;
+	// Ambil Data Pembayaran & HPP dari Nampan
+    $payments   = $params['payments'] ?? [];
+    $total_cogs = floatval($params['total_hpp'] ?? 0);
+	
     if ($action_type === 'procurement') {
-        // PAIR A: Aliran Uang (Dr) Biaya | (Cr) Kas/Bank
-        $this->insert_row($wpdb, $table_journal, $trx_date, $ref_id, puri_gl('purchase_cost'), $total_idr, 0, "Biaya: " . $desc, $user);
-        foreach ($params['payments'] as $pay) {
-            $this->insert_row($wpdb, $table_journal, $trx_date, $ref_id, $pay['account_code'], 0, $pay['amount'], "Bayar: " . $ref_id, $user);
-        }
+		// 1. Debet: Persediaan (Asset bertambah)
+		// 2. Kredit: Kas/Bank (Uang keluar)
 
-        // PAIR B: Aliran Barang (Dr) Persediaan | (Cr) HPP
-        $this->insert_row($wpdb, $table_journal, $trx_date, $ref_id, puri_gl('inventory'), $total_idr, 0, "Masuk Stok: " . $ref_id, $user);
-        $this->insert_row($wpdb, $table_journal, $trx_date, $ref_id, puri_gl('cogs'), 0, $total_idr, "HPP Kontra: " . $ref_id, $user);
-
+		$this->insert_row($wpdb, $table_journal, $trx_date, $ref_id, puri_gl('inventory'), $total_idr, 0, 'Inventory Increase: ' . $ref_id, $user);
+		foreach ($payments as $p) {
+		$this->insert_row($wpdb, $table_journal, $trx_date, $ref_id, $p['account_code'], 0, $p['amount'], 'Payment for: ' . $ref_id, $user); }
+		
     } elseif ($action_type === 'pos_submission') {
-// Kita asumsikan MC-05B mengirimkan 'is_buyback' => true jika kasir membeli barang
-        $is_buyback = $params['is_buyback'] ?? false;
-			if ($is_buyback) {
-				/**
-				 * KASUS: BELI ECERAN (Buyback dari Customer)
-				 * Resep sama dengan Procurement:
-				 * PAIR A: (Dr) Biaya Pembelian | (Cr) Kas/Bank [Uang Keluar]
-				 * PAIR B: (Dr) Persediaan | (Cr) HPP [Barang Masuk]
-				 */
-				$this->insert_row($wpdb, $table_journal, $trx_date, $ref_id, puri_gl('purchase_cost'), $total_idr, 0, "Beli Eceran: " . $desc, $user);
-				foreach ($params['payments'] as $pay) {
-					$this->insert_row($wpdb, $table_journal, $trx_date, $ref_id, $pay['account_code'], 0, $pay['amount'], "Bayar Cust: " . $ref_id, $user);
-				}
-				$this->insert_row($wpdb, $table_journal, $trx_date, $ref_id, puri_gl('inventory'), $total_idr, 0, "Masuk Stok (Ecer): " . $ref_id, $user);
-				$this->insert_row($wpdb, $table_journal, $trx_date, $ref_id, puri_gl('cogs'), 0, $total_idr, "HPP Kontra: " . $ref_id, $user);
+		
+		if ($is_buyback) {
+			// * KASUS: BELI ECERAN (Buyback dari Customer)
+			// 1. Debet: Persediaan (Asset bertambah)
+			// 2. Kredit: Kas/Bank (Uang keluar)
 
-			} else {
-				/**
-				 * KASUS: JUAL ECERAN (Normal Sales)
-				 * PAIR A: (Dr) Kas/Bank | (Cr) Sales Retail [Uang Masuk]
-				 * PAIR B: (Dr) HPP | (Cr) Persediaan [Barang Keluar]
-				 */
-				foreach ($params['payments'] as $pay) {
-					$this->insert_row($wpdb, $table_journal, $trx_date, $ref_id, $pay['account_code'], $pay['amount'], 0, "Terima POS: " . $ref_id, $user);
-				}
-				$this->insert_row($wpdb, $table_journal, $trx_date, $ref_id, puri_gl('sales_retail'), 0, $total_idr, "Pendapatan: " . $desc, $user);
+			$this->insert_row($wpdb, $table_journal, $trx_date, $ref_id, puri_gl('inventory'), $total_idr, 0, 'Buyback Inventory: ' . $ref_id, $user);
+			foreach ($payments as $p) {
+			$this->insert_row($wpdb, $table_journal, $trx_date, $ref_id, $p['account_code'], 0, $p['amount'], 'Payment to Cust: ' . $ref_id, $user);}
 
-				$this->insert_row($wpdb, $table_journal, $trx_date, $ref_id, puri_gl('cogs'), $total_idr, 0, "HPP Jual: " . $ref_id, $user);
-				$this->insert_row($wpdb, $table_journal, $trx_date, $ref_id, puri_gl('inventory'), 0, $total_idr, "Keluar Stok: " . $ref_id, $user);
-			}
+		} else {
+			// 1. Debet: Kas, 
+			// 2. Kredit: Pendapatan
+			foreach ($payments as $p) {
+			$this->insert_row($wpdb, $table_journal, $trx_date, $ref_id, $p['account_code'], $p['amount'], 0, 'Sales Receipt', $user); }
+			$this->insert_row($wpdb, $table_journal, $trx_date, $ref_id, puri_gl('sales_retail'), 0, $total_idr, 'Sales Revenue: ' . $desc, $user);
+			
+			// 3.Debet: HPP, Kredit: Persediaan
+			// 4. Nilai $total_cogs dihitung oleh Inventory Clerk (MC-03A); tapi kite pakai sedaiaan dari mc05
+			$this->insert_row($wpdb, $table_journal, $trx_date, $ref_id, puri_gl('cogs'), $total_cogs, 0, 'Cost of Goods Sold', $user);
+			$this->insert_row($wpdb, $table_journal, $trx_date, $ref_id, puri_gl('inventory'), 0, $total_cogs, 'Inventory Reduction', $user);
 		}
-
+	}
     return true;
 }
 

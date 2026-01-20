@@ -180,9 +180,10 @@ function puri_core_db_install() {
         id bigint(20) NOT NULL AUTO_INCREMENT,
         location_id varchar(50) NOT NULL,
         item_id bigint(20) NOT NULL,
-        qty decimal(19,4) DEFAULT 0,
+        balance decimal(19,4) DEFAULT 0,
         cost_avg decimal(19,4) DEFAULT 0,
-		last_updated datetime DEFAULT NULL,
+		updated_at datetime DEFAULT NULL,   -- Sinkron dengan mc-03b
+		last_ref varchar(50) DEFAULT NULL, -- PENAMBAHAN KOLOM AUDIT
         PRIMARY KEY (id),
         UNIQUE KEY loc_item (location_id, item_id)
     ) $collate;";

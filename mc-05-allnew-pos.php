@@ -6,7 +6,7 @@
  * 
  * @package     Puri_Money_Changer
  * @subpackage  Cockpit_POS
- * @version     6.10.32 (UX Restructured - Pool Transaction Phase 1)
+ * @version     7.8.36 (UX Restructured - Pool Transaction Phase 1)
  * @author      Denmas Totok (Architecture & Core Logic)
  * @refactor    Gemini AI Assistant (Code Optimization)
  * @since       2024-01-14
@@ -751,7 +751,8 @@ class CockpitPOS {
     this.cart = [];
     this.stockData = [];
     this.currentCustomer = null;
-
+	this.currentEditRef = null; // Menyimpan referensi asal jika sedang proses Edit
+	
     this.tradeMode = 'sell'; // default
     this.sortKey = 'denom';
     this.sortAsc = true;
@@ -1007,6 +1008,7 @@ editFromPool(refId) {
                         // 1. Restore State
                         this.cart = r.data.cart;
                         this.tradeMode = r.data.trade_mode;
+						this.currentEditRef = refId; // Simpan ID lama untuk tracking checkout ulang
                         
                         // 2. Update UI Radio Button Mode
                         $(`input[name="trade_mode"][value="${this.tradeMode}"]`).prop('checked', true);
@@ -1109,6 +1111,7 @@ silentVoid(refId) {
     fd.append('trade_mode', this.tradeMode);
     fd.append('cust_id',    this.currentCustomer.id);
     fd.append('payment_method', this.$payMethod.val()); // Kirim ID Akun (Kas/Bank)
+	if (this.currentEditRef) fd.append('old_ref_id', this.currentEditRef);
 
     U.ajax({
       type: 'POST',
@@ -1346,6 +1349,7 @@ public function ajax_process_checkout() {
     $customer_id = intval($_POST['cust_id']);
     $payment_method = sanitize_text_field($_POST['payment_method'] ?? 'cash');
     $delivery_method = sanitize_text_field($_POST['delivery_method'] ?? 'pickup');
+	$old_ref_id = sanitize_text_field($_POST['old_ref_id'] ?? '');
 
     if (empty($cart)) {
         wp_send_json_error('Cart is empty');
@@ -1460,6 +1464,10 @@ public function ajax_process_checkout() {
                 
             } else {
                 // BUY: Moving average cost calculation
+/*
+				* ----- Pembelian eceran di POS tidak boleh mengubah Moving Average (base_price).
+				* ----- Harga modal murni dikendalikan oleh modul Procurement (MC-04).
+				
                 $current_base_price = $wpdb->get_var($wpdb->prepare(
                     "SELECT base_price FROM $tbl_items WHERE id = %d", $item_sql_id
                 ));
@@ -1473,6 +1481,7 @@ public function ajax_process_checkout() {
                 if ($total_new_qty > 0) {
                     $new_avg_price = ($old_asset_val + $new_asset_val) / $total_new_qty;
                 }
+*/
 
                 // Update base price with new average
                 $wpdb->update($tbl_items, ['base_price' => $new_avg_price], ['id' => $item_sql_id]);
@@ -1532,10 +1541,10 @@ public function ajax_process_checkout() {
             'total_hpp' => $total_hpp,
             'items_snapshot' => json_encode($items_snapshot),
             'status' => 'pending',
-            'created_by' => get_current_user_id(),
-            'created_at' => current_time('mysql')
+			'created_by' => get_current_user_id(),
+            'created_at' => current_time('mysql'),
+            'notes'      => $old_ref_id ? "Revisi dari transaksi: $old_ref_id" : ""
         ]);
-
         // =====================================================================
         // 6. ❌ SKIP JOURNAL POSTING (will be done at EOD)
         // =====================================================================

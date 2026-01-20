@@ -58,7 +58,7 @@ if (!class_exists('PURI_Stock_Controller_V7')) {
                     // UPDATE: Tambah/Kurang saldo yang ada
                     $wpdb->query($wpdb->prepare(
                         "UPDATE {$table_stock} 
-                         SET qty = {$sql_op}, 
+                         SET balance = {$sql_op}, 
                              last_ref = %s, 
                              updated_at = %s 
                          WHERE item_id = %d",
@@ -71,7 +71,7 @@ if (!class_exists('PURI_Stock_Controller_V7')) {
                     // INSERT: Buat baris baru jika item belum pernah ada saldo
                     $wpdb->insert($table_stock, [
                         'item_id'    => $item_id,
-                        'qty'        => ($action_type === 'procurement' ? $qty_change : -$qty_change),
+                        'balance'        => ($action_type === 'procurement' ? $qty_change : -$qty_change),
                         'last_ref'   => $params['source_ref'],
                         'updated_at' => $params['created_at']
                     ]);

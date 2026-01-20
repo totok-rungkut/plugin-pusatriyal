@@ -1,7 +1,7 @@
 <?php
 /**
- * MC-05D - INVESTIGATION TOWER (REVERSAL HUB)
- * @version 7.0.1 (MOZART COMPATIBLE)
+ * MC-05A - INVESTIGATION TOWER (REVERSAL HUB)
+ * @version 7.3.11 (MOZART COMPATIBLE)
  * * Deskripsi:
  * Menampilkan saldo menggantung di akun Suspense yang menunggu hasil investigasi.
  * Mengeksekusi Reversal Jurnal via Mozart Engine.

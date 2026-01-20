@@ -1,7 +1,7 @@
 <?php
 /**
  * MC-05B - SUPERVISOR RECONCILIATION & MOZART COURIER
- * @version 7.8.1 (Payload Standardized)
+ * @version 7.8.21 (Payload Standardized)
  * Purpose: Jembatan (Bridge) antara T_POOL_TRANSACTIONS dengan MOZART ENGINE (MC-03).
  * Rules: Cash-Based, No-Recalculate HPP, Direct Posting.
  */
@@ -36,73 +36,60 @@ add_action('admin_init', function() {
 
             if (!$pool) continue;
 
-            // B. DECODE & RESOLVE ID (STANDARISASI PAYLOAD)
-            // Kita ubah JSON Snapshot menjadi struktur yang dimengerti Mozart (SQL ID based)
-            $raw_items = json_decode($pool->cart_snapshot, true);
+            // B. DECODE SNAPSHOT (Koreksi nama kolom ke items_snapshot)
+            $raw_items = json_decode($pool->items_snapshot, true); // 
             $clean_items = [];
             
             if ($raw_items) {
                 foreach ($raw_items as $raw) {
-                    // Cari SQL ID berdasarkan SKU (Logika Resolve)
-                    $sql_id = $wpdb->get_var($wpdb->prepare(
-                        "SELECT id FROM $t_items WHERE sku = %s", 
-                        $raw['sku']
-                    ));
-
-                    if ($sql_id) {
-                        $clean_items[] = [
-                            'item_id'     => intval($sql_id), // Penting: Integer ID untuk T_STOCK
-                            'sku'         => $raw['sku'],
-                            'name'        => $raw['name'],
-                            'qty'         => floatval($raw['qty']),
-                            'price_unit'  => floatval($raw['rate']), // Di POS ini Rate Jual
-                            'total_price' => floatval($raw['rate'] * $raw['qty'])
-                        ];
-                    }
+                    $clean_items[] = [
+                        'item_id'     => intval($raw['sql_id']), // [cite: 1327]
+                        'sku'         => $raw['sku'],
+                        'name'        => get_the_title($raw['wp_post_id']),
+                        'qty'         => floatval($raw['qty']),
+                        'total_valas' => floatval($raw['riyal']),
+                        'unit_price'  => floatval($raw['idr'] / ($raw['riyal'] ?: 1)), 
+                        'subtotal_idr'=> floatval($raw['idr'])
+                    ];
                 }
             }
 
-            // Jika item kosong (karena SKU tidak ketemu di DB), skip
-            if (empty($clean_items)) {
-                $fail_count++;
-                continue; 
-            }
+            if (empty($clean_items)) { $fail_count++; continue; }
 
-            // C. TENTUKAN AKUN KAS (Sementara Hardcode atau Helper sederhana)
-            // Nanti di MC-28 kita set mapping real-nya.
-            // Logic: Jika 'cash' -> 1101, Jika 'bank' -> 1102.
-            $target_account = ($pool->payment_method === 'cash') ? '1101' : '1102';
+            // C. RESOLUSI AKUN DINAMIS (MC-28)
+            $is_buyback = ($pool->trade_mode === 'buy');
+            $pay_account = ($pool->payment_method === 'cash') ? puri_gl('cash_drawer') : puri_gl('default_bank'); // [cite: 1709, 1724]
 
-            // D. SUSUN NAMPAN (PAYLOAD) - STRICTLY MATCHING MC-04 STRUCTURE
+            // D. SUSUN NAMPAN MATANG (Standardized for Mozart)
             $nampan = [
-                // 1. Header Identifiers
-                'source'            => 'pos', 
+                'source'            => 'pos_submission', // Match dengan mc-03c 
                 'source_ref'        => $pool->ref_id,
-                'created_at'        => $pool->created_at, 
-                'counterparty_id'   => $pool->customer_id ?: 0,
-                'counterparty_name' => 'General Customer', 
-                'description'       => "POS Sales: " . $pool->ref_id,
-                
-                // 2. The Goods (Resolved Items)
+                'created_at'        => $pool->trx_date,
+                'counterparty_id'   => $pool->customer_id ?: "-",
+                'counterparty_name' => $pool->customer_name ?: "Nasabah Umum",
+                'is_buyback'        => $is_buyback,
+				'total_hpp'         => floatval($pool->total_hpp),    // <-- PATCH: Kirim HPP yang sudah lahir di POS
+                'description'       => ($is_buyback ? "Buyback: " : "Sales: ") . ($pool->notes ?: $pool->ref_id),
+                'total_idr'         => floatval($pool->total_idr),
                 'items'             => $clean_items,
-
-                // 3. The Money (Payment Info) -> Sama persis strukturnya dengan MC-04
-                'payment_info'      => [
-                    'account' => $target_account, 
-                    'amount'  => floatval($pool->total_amount)
+                'payments'          => [ // Struktur Array untuk MC-03C [cite: 1683]
+                    [
+                        'account_code' => $pay_account,
+                        'amount'       => floatval($pool->total_idr)
+                    ]
                 ],
-
-                // 4. Cooking Instructions (Constraint POS)
                 'options'           => [
-                    'recalculate_hpp' => false,  // JANGAN hitung HPP baru
-                    'force_cash_mode' => true,   // Pastikan jurnal lawan Kas
-                    'journal_type'    => 'sales' // Sinyal untuk Journalist (Cr: Sales, Dr: Cash)
-                ]
+                    'recalculate_hpp' => false, // Proteksi HPP [cite: 1395]
+                    'force_cash_mode' => true
+                ],
+                'snapshot_json'     => "" // Akan diisi otomatis oleh Mozart store_json
             ];
 
+            // Tambahkan snapshot JSON untuk Audit Trail Mozart [cite: 1621]
+            $nampan['snapshot_json'] = json_encode($nampan);
+
             // E. EKSEKUSI KE MOZART
-            // Kita kirim sinyal action_type 'pos_release'
-            $result = $engine->execute('pos_release', $nampan);
+            $result = $engine->execute('pos_submission', $nampan); //
 
             if (!is_wp_error($result)) {
                 // Update Status Pool
@@ -116,6 +103,8 @@ add_action('admin_init', function() {
                 $fail_count++;
             }
         }
+
+
 
         if ($success_count > 0) {
             add_settings_error('puri_msg', 'success', "Sukses memposting $success_count transaksi.", 'updated');
@@ -171,8 +160,7 @@ function puri_render_reconciliation_page() {
 
                 <div id="pool-list">
                     <?php foreach ($results as $row): 
-                        $items = json_decode($row->cart_snapshot, true);
-                        $is_cash = ($row->payment_method === 'cash');
+						$items = json_decode($row->items_snapshot, true); // Sinkron dengan DB [cite: 1594]                        $is_cash = ($row->payment_method === 'cash');
                         $edge_color = $is_cash ? '#00a32a' : '#2271b1'; 
                     ?>
                     <div class="postbox" style="margin-bottom:15px; border-left:4px solid <?php echo $edge_color; ?>;">

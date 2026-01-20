@@ -30,8 +30,8 @@ function puri_render_bulk_opname_page() {
         $has_diff = false;
 
         foreach ($counts as $item_id => $phys_qty) {
-            $sys_qty  = floatval($_POST['sys_qty'][$item_id]);
-            $phys_qty = floatval($phys_qty);
+			$sys_qty = $wpdb->get_var($wpdb->prepare( "SELECT balance FROM " . puri_table_name('T_STOCK') . " WHERE item_id = %d", $item_id )) ?: 0;
+			$phys_qty = floatval($phys_qty);
             $diff_qty = $phys_qty - $sys_qty;
 
             if ($diff_qty != 0) {
