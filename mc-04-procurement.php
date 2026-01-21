@@ -440,11 +440,9 @@ jQuery(document).ready(function($) { if (typeof lucide !== 'undefined') { lucide
 // -----------------------------------------------------------------------------
 // POST HANDLER - MOZART BRIDGE (RESULT 6.6.12 COMPATIBLE)
 // -----------------------------------------------------------------------------
-/**
- * HANDLER: MC-04 PROCUREMENT HUB (Mozart Bridge)
- * Version: 7.3.14 (Stable Hybrid)
- * Logic: Cash-Based System, Single Source of Truth
- */
+// HANDLER: MC-04 PROCUREMENT HUB (Mozart Bridge)
+// Version: 7.3.14 (Patched) 00> fixing items.id
+// -----------------------------------------------------------------------------
 add_action('admin_post_puri_procure_submit', function() {
     puri_check_cap('manage_options');
 	
@@ -474,53 +472,53 @@ add_action('admin_post_puri_procure_submit', function() {
         $total_belanja_idr = 0;
         $items_for_engine  = []; // Menjadi sumber tunggal data item (Logic & Audit)
 
-		// Helper function lokal untuk membersihkan angka (Ribuan Titik/Koma)
-			$clean_num = function($val) {
+		// Helper function lokal untuk membersihkan angka
+		$clean_num = function($val) {
 			if (is_array($val)) return 0;
-			// Hapus titik ribuan, ganti koma desimal menjadi titik jika ada
 			$v = str_replace('.', '', $val); 
 			$v = str_replace(',', '.', $v); 
 			return floatval($v);
 		};
 
-        // 2. LOOPING & DATA ENRICHMENT (Menyusun Nampan Matang untuk Mozart)
+        // 2. LOOPING & DATA ENRICHMENT (Nampan untuk Mozart)
         foreach ($items_raw as $it) {
-            $item_id     = intval($it['item_id']);
-            // Pembersihan karakter non-numeric jika ada formatting ribuan dari JS
-			$qty         = $clean_num($it['qty']); 
-			$kurs        = $clean_num($it['kurs']);
-			$total_valas = $clean_num($it['total_riyal']);            
+            $wp_id       = intval($it['item_id']);              // dari form (wp_post_id)
+            $item_sql_id = puri_get_item_sql_id($wp_id);        // konversi ke master.id
+            
+            $qty         = $clean_num($it['qty']); 
+            $kurs        = $clean_num($it['kurs']);
+            $total_valas = $clean_num($it['total_riyal']);            
 
             if ($qty <= 0 && $total_valas <= 0) continue;
 
-            // AMBIL INFO ITEM: Agar Mozart bisa meledakkan (explode) SKU untuk deskripsi jurnal
+            // Ambil info item berdasarkan SQL ID
             $it_info = $wpdb->get_row($wpdb->prepare(
                 "SELECT sku, denom_value, name FROM ".puri_table_name('T_ITEMS')." WHERE id = %d", 
-                $item_id
+                $item_sql_id
             ));
             
-            $sku   = $it_info ? $it_info->sku : 'SKU-'.$item_id;
+            $sku   = $it_info ? $it_info->sku : 'SKU-'.$wp_id;
             $denom = $it_info ? $it_info->denom_value : 1;
             $name  = $it_info ? $it_info->name : 'Unknown Item';
 
-            // KALKULASI: Total IDR adalah Volume Uang (Valas) x Kurs
             $subtotal_idr = $total_valas * $kurs;
             $total_belanja_idr += $subtotal_idr;
 
-            // Masukkan ke array tunggal (Items Engine)
+            // Payload item untuk Mozart
             $items_for_engine[] = [
-                'item_id'     => $item_id,
+                'item_id'     => $item_sql_id,   // master.id
+                'wp_post_id'  => $wp_id,         // ikut simpan untuk audit
                 'sku'         => $sku,
                 'name'        => $name,
                 'denom'       => $denom,
-                'qty'         => $qty,          // Lembaran Fisik
-                'total_valas' => $total_valas,  // Volume Uang
-                'unit_price'  => $kurs,         // Kurs Beli (Basis HPP)
+                'qty'         => $qty,
+                'total_valas' => $total_valas,
+                'unit_price'  => $kurs,
                 'subtotal_idr'=> $subtotal_idr
             ];
         }
 
-        // 3. PAYMENTS GATHERING (Verifikasi Cash-Based)
+        // 3. PAYMENTS GATHERING
         $total_pembayaran = 0;
         $payments_for_engine = [];
         foreach ($pays_raw as $p) {
@@ -534,12 +532,12 @@ add_action('admin_post_puri_procure_submit', function() {
             ];
         }
 
-        // VALIDASI AKHIR: Harus Balance (Hanya Cash-Base, Tidak Boleh Ada Hutang)
+        // VALIDASI AKHIR
         if (abs($total_belanja_idr - $total_pembayaran) > 0.01) {
             throw new Exception("Transaksi tidak balance! Belanja: ".number_format($total_belanja_idr).", Pembayaran: ".number_format($total_pembayaran));
         }
 
-        // 4. BUNDLING TRX_PARAM GENERIK (Format Baku untuk Mozart MC-03)
+        // 4. BUNDLING TRX_PARAM GENERIK
         $trx_param = [
             'source'            => 'procurement',
             'source_ref'        => $source_ref,
@@ -550,27 +548,20 @@ add_action('admin_post_puri_procure_submit', function() {
 			'location_id'       => $location_id, 
             'created_at'        => current_time('mysql'),
             'created_by'        => get_current_user_id(),
-            'items'             => $items_for_engine,    // Mozart akan meracik deskripsi dari sini
-            'payments'          => $payments_for_engine, // Dasar penjurnalan sisi Credit (Cash/Bank)
-            'recalculate_hpp'   => true
+            'items'             => $items_for_engine,
+            'payments'          => $payments_for_engine,
+            'recalculate_hpp'   => true,
+            'snapshot_json'     => json_encode($items_for_engine)
         ];
 
-        // 5. SNAPSHOT JSON (Membekukan seluruh trx_param sebagai Audit Trail)
-		if (abs($total_belanja_idr - $total_pembayaran) > 0.1) {
-             throw new Exception("Transaksi tidak balance! Belanja: " . number_format($total_belanja_idr) . ", Pembayaran: " . number_format($total_pembayaran));
-        }
-		
-        $trx_param['snapshot_json'] = json_encode($trx_param);
-
-        // 6. DELIVERY TO MOZART (The Conductor)
-        // Mozart mengurus: DB Transaction, Stok, Ledger, & Jurnal matang via Accountant
+        // 5. DELIVERY TO MOZART
         $eng_ref = puri_mozart()->execute('procurement', $trx_param);
 
         if (is_wp_error($eng_ref)) {
             throw new Exception($eng_ref->get_error_message());
         }
 
-        // 7. FINISH & REDIRECT
+        // 6. FINISH & REDIRECT
         wp_safe_redirect(admin_url('admin.php?page=puri-procurement&puri_procure_ok=' . urlencode($source_ref)));
         exit;
 
@@ -578,6 +569,7 @@ add_action('admin_post_puri_procure_submit', function() {
         wp_die("Kesalahan Orkestrasi Mozart (MC-04): " . $e->getMessage());
     }
 });
+
 
 
 // AUTO-BRIDGE WP_ID TO SQL_ID (REVISED v7.3.14)

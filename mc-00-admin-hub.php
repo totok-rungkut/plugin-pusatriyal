@@ -19,16 +19,6 @@ defined('ABSPATH') || exit;
 if (!defined('PURI_VERSION')) define('PURI_VERSION', '7.0.0');
 
 
-
-// --- HELPERS (Tetap dipertahankan dari v6.0.1) ---
-if (!function_exists('puri_check_cap')) {
-    function puri_check_cap($cap = 'manage_options') {
-        if (!current_user_can($cap)) {
-            wp_die(__('Unauthorized', 'puri'));
-        }
-    }
-}
-
 function puri_table_name($const_name) {
     global $wpdb;
     return (defined($const_name)) ? $wpdb->prefix . constant($const_name) : '';
@@ -74,7 +64,8 @@ add_action('admin_menu', function() {
 
     // AKUNTANSI
     add_menu_page('Accounting', 'Akuntansi', 'manage_options', 'puri-accounting', 'puri_landing_accounting', 'dashicons-analytics', 32);
-    add_submenu_page('puri-accounting', 'Transfer Laci', '- Transfer Laci', 'manage_options', 'puri-stock-transfer', 'puri_render_transfer_page');
+// testing----    add_submenu_page('puri-accounting', 'Transfer Laci', '- Transfer Laci', 'manage_options', 'puri-stock-transfer', 'puri_render_transfer_page');
+    add_submenu_page('puri-accounting', 'Transfer Laci', '- Transfer Laci', 'manage_options', 'puri-transfer-stock', 'puri_render_transfer_page');
 	add_submenu_page('puri-accounting', 'Jurnal Umum', '- Jurnal Umum', 'manage_options', 'puri-manual-journal', 'puri_render_manual_journal_page');
 	add_submenu_page('puri-accounting', 'Stock Opname', '- Stock Opname', 'puri_can_rekonsiliasi', 'puri-stock-adj', 'puri_render_stock_adjustment_page');
     add_submenu_page('puri-accounting', 'Chart of Accounts', '- CoA Manager', 'manage_options', 'puri-coa', 'puri_render_coa_manager_page');

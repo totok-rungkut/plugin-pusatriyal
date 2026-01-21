@@ -139,6 +139,7 @@ function puri_core_db_install() {
     // SQL definitions (dbDelta friendly)
     $sql_items = "CREATE TABLE IF NOT EXISTS {$items_table} (
         id bigint(20) NOT NULL AUTO_INCREMENT,
+		wp_post_id bigint(20) NOT NULL,
         sku varchar(50) NOT NULL,
         name varchar(100) NOT NULL,
         type enum('currency','goods','package') DEFAULT 'currency',
@@ -169,6 +170,7 @@ function puri_core_db_install() {
         trx_date datetime DEFAULT CURRENT_TIMESTAMP,
         location_id varchar(50) NOT NULL,
         item_id bigint(20) NOT NULL,
+		wp_post_id bigint(20) NOT NULL,
         qty_change decimal(19,4) DEFAULT 0,
         trx_type varchar(20) DEFAULT 'sell',
         ref_id varchar(50) NOT NULL,
@@ -180,6 +182,7 @@ function puri_core_db_install() {
         id bigint(20) NOT NULL AUTO_INCREMENT,
         location_id varchar(50) NOT NULL,
         item_id bigint(20) NOT NULL,
+		wp_post_id bigint(20) NOT NULL,
         balance decimal(19,4) DEFAULT 0,
         cost_avg decimal(19,4) DEFAULT 0,
 		updated_at datetime DEFAULT NULL,   -- Sinkron dengan mc-03b
@@ -192,6 +195,7 @@ function puri_core_db_install() {
     $sql_json = "CREATE TABLE IF NOT EXISTS {$json_table} (
         id bigint(20) NOT NULL AUTO_INCREMENT,
         ref_id varchar(50) NOT NULL,
+		wp_post_id bigint(20) NOT NULL,
         source_module varchar(30) NOT NULL,
         snapshot_json longtext,
         created_at datetime DEFAULT CURRENT_TIMESTAMP,
@@ -202,6 +206,7 @@ function puri_core_db_install() {
     $sql_locks = "CREATE TABLE IF NOT EXISTS {$locks_table} (
         id bigint(20) NOT NULL AUTO_INCREMENT,
         item_id bigint(20) NOT NULL,
+		wp_post_id bigint(20) NOT NULL,
         qty_lock int DEFAULT 0,
         PRIMARY KEY (id),
         UNIQUE KEY item_id (item_id)
@@ -225,6 +230,7 @@ function puri_core_db_install() {
 $pool_transactions_table = puri_table_name('T_POOL_TRANSACTIONS');
 $sql_pool_transactions = "CREATE TABLE IF NOT EXISTS {$pool_transactions_table} (
     id bigint(20) NOT NULL AUTO_INCREMENT,
+	wp_post_id bigint(20) NOT NULL,
     ref_id varchar(50) NOT NULL,
     trx_date datetime NOT NULL,
     trade_mode enum('sell','buy') NOT NULL DEFAULT 'sell',
@@ -256,6 +262,7 @@ $sql_pool_transactions = "CREATE TABLE IF NOT EXISTS {$pool_transactions_table} 
 $pool_stock_table = puri_table_name('T_POOL_STOCK');
 $sql_pool_stock = "CREATE TABLE IF NOT EXISTS {$pool_stock_table} (
     id bigint(20) NOT NULL AUTO_INCREMENT,
+	wp_post_id bigint(20) NOT NULL,
     ref_id varchar(50) NOT NULL,
     item_id bigint(20) NOT NULL,
     location_id varchar(50) NOT NULL,
@@ -270,6 +277,7 @@ $sql_pool_stock = "CREATE TABLE IF NOT EXISTS {$pool_stock_table} (
 $pool_journal_table = puri_table_name('T_POOL_JOURNAL');
 $sql_pool_journal = "CREATE TABLE IF NOT EXISTS {$pool_journal_table} (
     id bigint(20) NOT NULL AUTO_INCREMENT,
+	wp_post_id bigint(20) NOT NULL,
     ref_id varchar(50) NOT NULL,
     account_code varchar(20) NOT NULL,
     debit decimal(19,4) DEFAULT 0,
@@ -285,6 +293,7 @@ $sql_pool_journal = "CREATE TABLE IF NOT EXISTS {$pool_journal_table} (
 $eod_batches_table = puri_table_name('T_EOD_BATCHES');
 $sql_eod_batches = "CREATE TABLE IF NOT EXISTS {$eod_batches_table} (
     id bigint(20) NOT NULL AUTO_INCREMENT,
+	wp_post_id bigint(20) NOT NULL,
     batch_date date NOT NULL,
     total_transactions int DEFAULT 0,
     total_riyal decimal(19,4) DEFAULT 0,

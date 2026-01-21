@@ -1,8 +1,10 @@
 <?php
 /**
  * MC 03 - PURI Engine V7 (MOZART)
- * Orchestrator Utama
- * ver 7.3.15 (Updated with JSON Storage)
+ * Version: 7.4.0 (MC-40 Transfer Support)
+ * 
+ * CHANGELOG v7.4.0:
+ * - Added stock_transfer action handler
  */
 
 defined('ABSPATH') || exit;
@@ -27,13 +29,21 @@ if (!class_exists('PURI_Engine_Mozart')) {
             global $wpdb;
             $wpdb->query('START TRANSACTION');
             try {
-                // 1. Simpan nampan mentah ke gudang JSON (Look-up Table)
+                // 1. Store JSON snapshot
                 $this->store_json($action_type, $params);
 
-                // 2. Instruksikan asisten melakukan tugas masing-masing
-                $this->stocker->update_balance($action_type, $params);
-                $this->ledger->record_mutation($params);
-                $this->journalist->post_to_gl($action_type, $params);
+                // 2. Execute based on action type
+                if ($action_type === 'stock_transfer') {
+                    // SPECIAL: Transfer doesn't need journal posting
+                    $this->stocker->update_balance($action_type, $params);
+                    $this->ledger->record_mutation($params);
+                    // NO journalist call - pure inventory movement
+                } else {
+                    // Normal flow: procurement, pos_submission
+                    $this->stocker->update_balance($action_type, $params);
+                    $this->ledger->record_mutation($params);
+                    $this->journalist->post_to_gl($action_type, $params);
+                }
 
                 $wpdb->query('COMMIT');
                 return true;
@@ -43,15 +53,10 @@ if (!class_exists('PURI_Engine_Mozart')) {
             }
         }
 
-        /**
-         * Private Routine: Menyimpan Snapshot JSON
-         * Dipindahkan ke dalam class agar bisa dipanggil via $this->
-         */
         private function store_json($action_type, $params) {
             global $wpdb;
             if (empty($params['snapshot_json'])) return;
 
-            // Menggunakan REPLACE agar idempotent (mencegah duplikasi ref_id)
             $wpdb->replace(puri_table_name('T_JSON'), [
                 'ref_id'        => $params['source_ref'],
                 'source_module' => $action_type,
@@ -75,9 +80,6 @@ if (!class_exists('PURI_Engine_Mozart')) {
     }
 }
 
-/**
- * Global Accessor
- */
 function puri_mozart() {
     static $instance = null;
     if (null === $instance) $instance = new PURI_Engine_Mozart();
