@@ -129,28 +129,28 @@ add_action('acf/init', function() {
 		'fields' => [
             ['key'=>'c_tab_1','label'=>'Data Dasar','type'=>'tab'],
 				['key'=>'c_address','label'=>'Alamat Sesuai KTP','name'=>'cust_address','type'=>'textarea','rows'=>2,'wrapper'=>['width'=>'70']],
-				['key'=>'c_city','label'=>'Kota','name'=>'cust_city','type'=>'text','wrapper'=>['width'=>'30']],
-				
-				['key'=>'c_phone','label'=>'WhatsApp (Wajib)','name'=>'cust_phone','type'=>'text', 'required'=>0,'wrapper'=>['width'=>'33']],
-				['key'=>'c_code','label'=>'Code','name'=>'cust_code','type'=>'text','wrapper'=>['width'=>'20']],
-				['key'=>'c_email','label'=>'Email','name'=>'cust_email','type'=>'email','wrapper'=>['width'=>'50']],
+				['key'=>'c_city','label'=>'Kota','name'=>'cust_city','type'=>'text','wrapper'=>['width'=>'30']],			
+				['key'=>'c_phone','label'=>'WhatsApp (Wajib)','name'=>'cust_phone','type'=>'text', 'required'=>0,'wrapper'=>['width'=>'25']],
 				['key'=>'c_type','label'=>'Tipe Customer','name'=>'cust_type','type'=>'select','choices'=>[
 					'umum'         => 'Umum',
 					'member'       => 'Member',
 					'agent'        => 'Agent',
 					'moneychanger' => 'Money Changer',
 					'bank'         => 'Bank'
-				],'default_value'=>'umum','wrapper'=>['width'=>'30']],
+				],'default_value'=>'umum','wrapper'=>['width'=>'20'] ],
+				['key'=>'c_code','label'=>'Code Customer','name'=>'cust_code','type'=>'text','wrapper'=>['width'=>'20']],
+				['key'=>'c_email','label'=>'Email','name'=>'cust_email','type'=>'email','wrapper'=>['width'=>'35']],
 				
 			['key'=>'c_tab_2','label'=>'Legalitas & Alamat','type'=>'tab'],
-				['key'=>'c_nik','label'=>'Nomor Identitas (NIK/Passport)','name'=>'cust_nik','type'=>'text','required'=>0,'wrapper'=>['width'=>'33']],
 				['key'=>'c_id_type','label'=>'Jenis Identitas','name'=>'cust_id_type','type'=>'select','choices'=>[
 					'KTP'   => 'KTP',
 					'SIM'   => 'SIM',
 					'PASSPORT' => 'Passport',
 					'NPWP'  => 'NPWP',
 					'KUPVA' => 'KUPVA'
-				],'default_value'=>'KTP','wrapper'=>['width'=>'34']],
+				],'default_value'=>'KTP','wrapper'=>['width'=>'34'] ],
+				['key'=>'c_nik','label'=>'Nomor Identitas (NIK/Passport)','name'=>'cust_nik','type'=>'text','required'=>0,'wrapper'=>['width'=>'33']],
+				['key'=>'c_citizenship','label'=>'Kewarganegaraan','name'=>'cust_citizenship','type'=>'text','wrapper'=>['width'=>'30']],			
 				['key'=>'c_occupation','label'=>'Pekerjaan','name'=>'cust_occupation','type'=>'text','wrapper'=>['width'=>'50']],
 				['key'=>'c_purpose','label'=>'Tujuan Transaksi','name'=>'cust_purpose','type'=>'text','wrapper'=>['width'=>'50']],
 				['key'=>'c_ktp_img','label'=>'Scan KTP/Identitas (Wajib Publish)','name'=>'cust_ktp_image','type'=>'image','return_format'=>'id','wrapper'=>['width'=>'100']],

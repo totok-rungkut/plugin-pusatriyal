@@ -29,6 +29,8 @@
 
 
 defined('ABSPATH') || exit;
+global $wpdb;
+
 
 class Puri_Cockpit_POS {
 
@@ -227,10 +229,13 @@ public function ajax_upload_customer_id() {
      * └────────────────────────────────────────────────────────────┘
      */
     public function allnew_pos_render_page() {
+		global $wpdb;
         $items = $this->get_items_for_dropdown(); 
         $customers = $this->get_customers_for_dropdown();
         $is_finance_or_admin = current_user_can('can_entry');
-			
+		// Ambil lokasi default POS dari ACF option
+		$locations   = get_option('puri_inv_locations', []);
+		$default_loc = get_option('puri_pos_default_location', 'laci-kasir-01');	
         ?>
         <div class="wrap puri-cockpit-wrapper">
             <h1 class="wp-heading-inline">
@@ -310,6 +315,14 @@ public function ajax_upload_customer_id() {
                                         <span class="info-label"><i class="fa-solid fa-location-dot"></i> Address:</span>
                                         <span id="info_address" class="info-value">-</span>
                                     </div>
+                                    <div class="info-row">
+                                        <span class="info-label"><i class="fa-duotone fa-solid fa-flag"></i> Citizenship:</span>
+                                        <span id="info_citizenship" class="info-value">-</span>
+                                    </div>
+                                    <div class="info-row">
+                                        <span class="info-label"><i class="fa-solid fa-location-dot"></i> Occupation:</span>
+                                        <span id="info_address" class="info-value">-</span>
+                                    </div>
                                 </div>
 
                             </div>
@@ -328,6 +341,23 @@ public function ajax_upload_customer_id() {
                             <div class="panel-body">
                                 
                                 <!-- Item Selection Row -->
+								
+<?php
+$items_table = $wpdb->prefix . 'puri_pr_master_items';
+$stock_table = $wpdb->prefix . 'puri_inventory_balance';
+
+
+$items = $wpdb->get_results($wpdb->prepare("
+    SELECT t.id, t.wp_post_id, t.sku, t.name, t.denom_value,
+           COALESCE(s.balance,0) AS stock_balance
+    FROM {$items_table} t
+    LEFT JOIN {$stock_table} s
+      ON t.id = s.item_id AND s.location_id = %s
+    WHERE t.type = 'currency'
+    ORDER BY t.denom_value ASC
+", $default_loc));
+?>								
+		
                                 <div class="form-group mb-2">
                                     <label class="small-label">Select Item (SKU) *</label>
                                     <select id="item_select" class="puri-input">
@@ -336,7 +366,7 @@ public function ajax_upload_customer_id() {
                                             <option value="<?php echo $it->ID; ?>" 
                                                     data-denom="<?php echo esc_attr($it->denom); ?>"
                                                     data-rate="<?php echo esc_attr($it->sell_rate); ?>"
-                                                    data-stock="<?php echo esc_attr($it->stock_laci); ?>"
+                                                    data-stock="<?php echo esc_attr($it->stock_balance); ?>"
                                                     data-img="<?php echo esc_attr($it->img_url); ?>">
                                                 <?php echo esc_html($it->post_title); ?> (Stock: <?php echo $it->stock_laci; ?>)
                                             </option>
@@ -387,6 +417,7 @@ public function ajax_upload_customer_id() {
                                 <input type="hidden" id="base_rate_hidden" value="0">
                                 <input type="hidden" id="current_stock" value="0">
                                 <input type="hidden" id="is_finance" value="<?php echo $is_finance_or_admin ? '1' : '0'; ?>">
+								<input type="hidden" id="pos_location_id" value="<?php echo esc_attr($default_loc); ?>">
 
                             </div>
                         </div>
@@ -1137,6 +1168,10 @@ silentVoid(refId) {
 window.Cockpit = new CockpitPOS();
 
 });
+
+// activate font Lucide ------------------
+jQuery(document).ready(function($) { if (typeof lucide !== 'undefined') { lucide.createIcons(); } });
+
 </script>
 
 
@@ -1175,7 +1210,7 @@ window.Cockpit = new CockpitPOS();
             $stock = 0;
 
             if ($sku && $tbl_items) {
-                $query = "SELECT (COALESCE(s.qty, 0) - COALESCE(l.qty_lock, 0)) as ready_stock, 
+                $query = "SELECT (COALESCE(s.balance, 0) - COALESCE(l.qty_lock, 0)) as ready_stock, 
                                  i.denom_value, i.sell_rate 
                           FROM {$tbl_items} i 
                           LEFT JOIN {$tbl_stock} s ON i.id = s.item_id AND s.location_id = 'laci_kasir' 
@@ -1222,11 +1257,17 @@ window.Cockpit = new CockpitPOS();
             $phone = get_post_meta($p->ID, '_puri_cust_phone', true) ?: '-';
             $nik = get_post_meta($p->ID, '_puri_cust_nik', true) ?: '-';
             $address = get_post_meta($p->ID, '_puri_cust_address', true) ?: '-';
+            $citizenship = get_post_meta($p->ID, '_puri_cust_address', true) ?: '-';
+            $occupation = get_post_meta($p->ID, '_puri_cust_address', true) ?: '-';
+            $needfor = get_post_meta($p->ID, '_puri_cust_address', true) ?: '-';
             
             $p->type = $type;
             $p->phone = $phone;
             $p->nik = $nik;
             $p->address = $address;
+            $p->citizenship = $citizenship;
+            $p->occupation = $occupation;
+            $p->needfor= $needfor;
             $results[] = $p;
         }
         return $results;
@@ -1313,7 +1354,8 @@ window.Cockpit = new CockpitPOS();
             'name' => $name,
             'nik' => $id_number,
             'phone' => $phone,
-            'address' => $address . ', ' . $city
+            'address' => $address . ', ' . $city,
+			'citizenship' => $citizenship
         ]);
     }
 
@@ -1331,246 +1373,68 @@ window.Cockpit = new CockpitPOS();
  
 public function ajax_process_checkout() {
     check_ajax_referer('puri_pos_checkout', 'nonce');
-    
-    if (!current_user_can('manage_options')) {
-        wp_send_json_error('Unauthorized');
-    }
-
     global $wpdb;
-    
-    // =========================================================================
-    // 1. EXTRACT REQUEST DATA
-    // =========================================================================
-    $trade_mode = sanitize_text_field($_POST['trade_mode'] ?? 'sell');
-    $trade_mode = in_array($trade_mode, ['sell', 'buy']) ? $trade_mode : 'sell';
-    
-    $cart = json_decode(stripslashes($_POST['cart']), true);
-    $cust_mode = sanitize_text_field($_POST['cust_mode']);
-    $customer_id = intval($_POST['cust_id']);
-    $payment_method = sanitize_text_field($_POST['payment_method'] ?? 'cash');
-    $delivery_method = sanitize_text_field($_POST['delivery_method'] ?? 'pickup');
-	$old_ref_id = sanitize_text_field($_POST['old_ref_id'] ?? '');
 
-    if (empty($cart)) {
-        wp_send_json_error('Cart is empty');
+    // 1. Generate Reference ID
+    $ref_id = 'POS-' . current_time('Ymd') . '-' . strtoupper(wp_generate_password(4, false));
+
+    // 2. Ambil data dari POST
+    $customer_id   = intval($_POST['customer_id'] ?? 0);
+    $trade_mode    = sanitize_text_field($_POST['trade_mode'] ?? 'sell');
+    $payment_method= sanitize_text_field($_POST['payment_method'] ?? 'cash');
+    $delivery      = sanitize_text_field($_POST['delivery_method'] ?? 'pickup');
+    $items_raw     = $_POST['items'] ?? [];
+	// Ambil location_id dari POST atau fallback ke default ACF option
+	$location_id   = sanitize_text_field($_POST['location_id'] ?? get_option('puri_pos_default_location', 'laci-kasir-01'));
+
+    // 3. Build items payload (Mozart format)
+    $items_payload = [];
+    foreach ($items_raw as $it) {
+        $item_id = intval($it['item_id']);
+        $qty     = intval($it['qty']);
+        $rate    = floatval($it['rate']);
+        $denom   = intval($it['denom']);
+
+        if ($item_id <= 0 || $qty <= 0) continue;
+
+        $items_payload[] = [
+            'item_id'    => $item_id,   // gunakan ID dari master_items
+            'qty'        => $qty,
+            'denom'      => $denom,
+            'rate'       => $rate,
+            'subtotal'   => $qty * $denom * $rate
+        ];
     }
 
-    // =========================================================================
-    // 2. TRANSACTION SETUP
-    // =========================================================================
-    $wpdb->query('START TRANSACTION');
-    
-    try {
-        // Customer data
-        $customer_name = get_the_title($customer_id);
-        $customer_nik = get_post_meta($customer_id, '_puri_cust_nik', true) ?: '-';
-        
-        // Generate ref_id
-        $ref_id = ($trade_mode == 'buy' ? 'BUY-' : 'POS-') . date('YmdHis') . '-' . rand(100, 999);
-        $trx_date = current_time('mysql');
-        
-        // Initialize totals
-        $total_riyal = 0;
-        $total_idr = 0;
-        $total_hpp = 0;
-        
-        // Table references
-        $tbl_items = puri_table_name('T_ITEMS');
-        $tbl_stock = puri_table_name('T_STOCK');
-        $tbl_pool_stock = puri_table_name('T_POOL_STOCK');
-        $location_id = 'laci_kasir';
+    // 4. Build payments payload
+    $payments_payload = [[
+        'method' => $payment_method,
+        'amount' => array_sum(array_column($items_payload, 'subtotal')),
+        'delivery'=> $delivery
+    ]];
 
-        // =====================================================================
-        // 3. COST MAPPING (for SELL mode HPP calculation)
-        // =====================================================================
-        $cost_map = [];
-        if ($trade_mode === 'sell') {
-            $item_wp_ids = array_column($cart, 'id');
-            $item_sql_ids = [];
-            
-            foreach ($item_wp_ids as $wp_id) {
-                $sql_id = puri_get_item_sql_id($wp_id);
-                if ($sql_id) $item_sql_ids[] = $sql_id;
-            }
+    // 5. Assemble Mozart Transaction Parameter
+    $trx_param = [
+        'source'          => 'pos',
+        'source_ref'      => $ref_id,
+        'trade_mode'      => $trade_mode,
+        'customer_id'     => $customer_id,
+        'location_id'     => $location_id,
+        'items'           => $items_payload,
+        'payments'        => $payments_payload,
+        'created_at'      => current_time('mysql'),
+        'created_by'      => get_current_user_id(),
+        'snapshot_json'   => json_encode($items_payload)
+    ];
 
-            if (!empty($item_sql_ids)) {
-                $placeholders = implode(',', array_fill(0, count($item_sql_ids), '%d'));
-                $query = "SELECT i.id, COALESCE(s.cost_avg, i.base_price, 0) AS cost_price
-                          FROM {$tbl_items} i
-                          LEFT JOIN {$tbl_stock} s ON i.id = s.item_id AND s.location_id = %s
-                          WHERE i.id IN ($placeholders)";
-                $params = array_merge([$location_id], $item_sql_ids);
-                $rows = $wpdb->get_results($wpdb->prepare($query, ...$params));
-                
-                foreach ($rows as $r) {
-                    $cost_map[$r->id] = floatval($r->cost_price);
-                }
-            }
-        }
+    // 6. Execute via Mozart
+    $result = puri_mozart()->execute('pos_checkout', $trx_param);
 
-        // =====================================================================
-        // 4. PROCESS CART ITEMS
-        // =====================================================================
-        $items_snapshot = [];
-        
-        foreach ($cart as $item) {
-            $wp_post_id = (int) $item['id'];
-            $qty = (int) $item['qty'];
-            $riyal = (float) $item['riyal'];
-            $idr = (float) $item['idr'];
-            
-            $item_sql_id = puri_get_item_sql_id($wp_post_id);
-            if ($qty <= 0) continue;
-
-            // -----------------------------------------------------------------
-            // 4A. LOCK STOCK (FOR UPDATE)
-            // -----------------------------------------------------------------
-            $curr = $wpdb->get_var($wpdb->prepare(
-                "SELECT qty FROM $tbl_stock WHERE item_id = %d AND location_id = %s FOR UPDATE",
-                $item_sql_id, $location_id
-            ));
-
-            if (is_null($curr)) {
-                // Create stock record if not exists
-                $wpdb->insert($tbl_stock, [
-                    'item_id' => $item_sql_id,
-                    'location_id' => $location_id,
-                    'qty' => 0,
-                    'last_updated' => current_time('mysql')
-                ]);
-                $curr = 0;
-            }
-
-            // -----------------------------------------------------------------
-            // 4B. MODE-SPECIFIC LOGIC
-            // -----------------------------------------------------------------
-            if ($trade_mode === 'sell') {
-                // SELL: Check stock availability
-                if ($curr < $qty) {
-                    throw new Exception("Insufficient stock for item ID: $wp_post_id (Available: $curr, Needed: $qty)");
-                }
-
-                // Update real stock (for validation)
-                $wpdb->query($wpdb->prepare(
-                    "UPDATE $tbl_stock SET qty = qty - %d, last_updated = %s 
-                     WHERE item_id = %d AND location_id = %s",
-                    $qty, current_time('mysql'), $item_sql_id, $location_id
-                ));
-
-                // Calculate HPP
-                $cost_price = $cost_map[$item_sql_id] ?? 0;
-                $item_hpp = $cost_price * $qty;
-                $total_hpp += $item_hpp;
-                
-            } else {
-                // BUY: Moving average cost calculation
-/*
-				* ----- Pembelian eceran di POS tidak boleh mengubah Moving Average (base_price).
-				* ----- Harga modal murni dikendalikan oleh modul Procurement (MC-04).
-				
-                $current_base_price = $wpdb->get_var($wpdb->prepare(
-                    "SELECT base_price FROM $tbl_items WHERE id = %d", $item_sql_id
-                ));
-                $current_base_price = floatval($current_base_price);
-
-                $old_asset_val = $curr * $current_base_price;
-                $new_asset_val = $idr;
-                $total_new_qty = $curr + $qty;
-
-                $new_avg_price = 0;
-                if ($total_new_qty > 0) {
-                    $new_avg_price = ($old_asset_val + $new_asset_val) / $total_new_qty;
-                }
-*/
-
-                // Update base price with new average
-                $wpdb->update($tbl_items, ['base_price' => $new_avg_price], ['id' => $item_sql_id]);
-
-                // Update real stock (increase)
-                $wpdb->query($wpdb->prepare(
-                    "UPDATE $tbl_stock SET qty = qty + %d, last_updated = %s 
-                     WHERE item_id = %d AND location_id = %s",
-                    $qty, current_time('mysql'), $item_sql_id, $location_id
-                ));
-            }
-
-            // -----------------------------------------------------------------
-            // 4C. INSERT TO POOL STOCK (Shadow Ledger)
-            // -----------------------------------------------------------------
-            $wpdb->insert($tbl_pool_stock, [
-                'ref_id' => $ref_id,
-                'item_id' => $item_sql_id,
-                'location_id' => $location_id,
-                'qty_change' => ($trade_mode === 'sell') ? -$qty : +$qty,
-                'created_at' => current_time('mysql')
-            ]);
-
-            // -----------------------------------------------------------------
-            // 4D. BUILD SNAPSHOT
-            // -----------------------------------------------------------------
-            $items_snapshot[] = [
-                'sku' => get_field('item_sku_code', $wp_post_id),
-                'wp_post_id' => $wp_post_id,
-                'sql_id' => $item_sql_id,
-                'qty' => $qty,
-                'riyal' => $riyal,
-                'idr' => $idr,
-                'hpp' => ($trade_mode === 'sell') ? ($cost_price ?? 0) : 0
-            ];
-
-            $total_riyal += $riyal;
-            $total_idr += $idr;
-        }
-
-        // =====================================================================
-        // 5. INSERT TO POOL TRANSACTIONS (Main Staging)
-        // =====================================================================
-        $tbl_pool_trx = puri_table_name('T_POOL_TRANSACTIONS');
-        
-        $wpdb->insert($tbl_pool_trx, [
-            'ref_id' => $ref_id,
-            'trx_date' => $trx_date,
-            'trade_mode' => $trade_mode,
-            'customer_id' => $customer_id,
-            'customer_name' => $customer_name,
-            'customer_nik' => $customer_nik,
-            'payment_method' => $payment_method,
-            'delivery_method' => $delivery_method,
-            'total_riyal' => $total_riyal,
-            'total_idr' => $total_idr,
-            'total_hpp' => $total_hpp,
-            'items_snapshot' => json_encode($items_snapshot),
-            'status' => 'pending',
-			'created_by' => get_current_user_id(),
-            'created_at' => current_time('mysql'),
-            'notes'      => $old_ref_id ? "Revisi dari transaksi: $old_ref_id" : ""
-        ]);
-        // =====================================================================
-        // 6. ❌ SKIP JOURNAL POSTING (will be done at EOD)
-        // =====================================================================
-        // OLD CODE (REMOVED):
-        // puri_insert_journal(...);
-        
-        // NEW BEHAVIOR:
-        // Journals will be created by EOD posting process
-
-        // =====================================================================
-        // 7. COMMIT & RESPOND
-        // =====================================================================
-        $wpdb->query('COMMIT');
-        
-        wp_send_json_success([
-            'ref_id' => $ref_id,
-            'status' => 'pending',
-            'message' => 'Transaction staged in POOL. Will be posted at End of Day.',
-            'total_idr' => number_format($total_idr, 0, ',', '.'),
-            'pool_mode' => true
-        ]);
-
-    } catch (Exception $e) {
-        $wpdb->query('ROLLBACK');
-        wp_send_json_error($e->getMessage());
+    if (is_wp_error($result)) {
+        wp_send_json_error(['message' => $result->get_error_message()]);
     }
+
+    wp_send_json_success(['ref_id' => $ref_id]);
 }
 
 
@@ -1712,7 +1576,7 @@ public function ajax_get_daily_mutation() {
         // Get items with current stock
         $items = $wpdb->get_results("
             SELECT i.id, i.name, i.sku, i.type, i.denom_value, 
-                   s.qty as stock_phys, l.qty_lock 
+                   s.balance as stock_phys, l.qty_lock 
             FROM " . puri_table_name('T_ITEMS') . " i 
             LEFT JOIN " . puri_table_name('T_STOCK') . " s ON i.id = s.item_id AND s.location_id = 'laci_kasir' 
             LEFT JOIN " . puri_table_name('T_LOCKS') . " l ON i.id = l.item_id 
@@ -1774,6 +1638,8 @@ if (!function_exists('allnew_pos_render_page')) {
      */
     function allnew_pos_render_page() {
         global $puri_cockpit_pos;
+		$locations = get_option('puri_inv_locations', []);
+		$default_loc = get_option('puri_pos_default_location', 'laci-kasir-01');
         if ($puri_cockpit_pos instanceof Puri_Cockpit_POS) {
             $puri_cockpit_pos->allnew_pos_render_page();
         } else {
