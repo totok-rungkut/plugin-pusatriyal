@@ -6,7 +6,7 @@
  * 
  * @package     Puri_Money_Changer
  * @subpackage  Cockpit_POS
- * @version     7.8.36 (UX Restructured - Pool Transaction Phase 1)
+ * @version     7.8.38 (UX Restructured - Pool Transaction Phase 1)
  * @author      Denmas Totok (Architecture & Core Logic)
  * @refactor    Gemini AI Assistant (Code Optimization)
  * @since       2024-01-14
@@ -54,94 +54,222 @@ class Puri_Cockpit_POS {
     }
 
 
+/**
+ * AJAX: Get Pool Transaction Snapshot (untuk Edit)
+ */
 public function get_pool_snapshot() {
+    check_ajax_referer('puri_pos_checkout', 'nonce');
     global $wpdb;
-    check_ajax_referer('puri_pos_checkout', 'nonce'); // Re-use nonce checkout
 
-    $ref_id = sanitize_text_field($_POST['ref_id']);
-    $table  = puri_table_name('T_POOL_TRANSACTIONS');
+    $ref_id = sanitize_text_field($_POST['ref_id'] ?? '');
+    
+    if (empty($ref_id)) {
+        wp_send_json_error('Reference ID tidak valid');
+    }
 
+    $tbl_pool = puri_table_name('T_POOL_TRANSACTIONS');
+    
+    // ✅ Ambil data transaksi
     $row = $wpdb->get_row($wpdb->prepare(
-        "SELECT * FROM $table WHERE ref_id = %s AND status = 'pending'",
+        "SELECT * FROM {$tbl_pool} WHERE ref_id = %s",
         $ref_id
     ));
 
     if (!$row) {
-        wp_send_json_error('Data tidak ditemukan atau sudah diposting.');
+        wp_send_json_error('Transaksi tidak ditemukan');
     }
 
-    // Ambil data customer dari ID yang tersimpan
-    $cust_id = $row->customer_id;
-    // (Optional: Join dengan master customer jika perlu detail lebih)
-
-    wp_send_json_success([
-        'trade_mode' => $row->trade_mode,
-        'cust_id'    => $row->customer_id,
-        'cart'       => json_decode($row->cart_snapshot, true), // Mengembalikan state cart utuh
-        'pay_method' => $row->payment_method
-    ]);
-}
-
-public function void_pool_transaction() {
-        global $wpdb;
-        check_ajax_referer('puri_pos_checkout', 'nonce');
-
-        $ref_id = sanitize_text_field($_POST['ref_id']);
-        
-        $wpdb->query('START TRANSACTION');
-        
-        // 1. Update status di T_POOL_TRANSACTIONS menjadi void
-        $wpdb->update(puri_table_name('T_POOL_TRANSACTIONS'), 
-            ['status' => 'void'], 
-            ['ref_id' => $ref_id]
-        );
-
-        // 2. KEMBALIKAN STOK FISIK (Sangat Penting!)
-        // Cari semua item di T_POOL_STOCK terkait ref_id ini
-        $items = $wpdb->get_results($wpdb->prepare(
-            "SELECT item_id, qty FROM ".puri_table_name('T_POOL_STOCK')." WHERE ref_id = %s",
-            $ref_id
-        ));
-
-        foreach ($items as $item) {
-            // Logika kebalikan: jika dulu jual (minus), sekarang tambah (plus)
-            // Ini memanggil fungsi sync stok internal Anda
-            $this->reverse_physical_stock($item->item_id, $item->qty);
-        }
-
-        $wpdb->query('COMMIT');
-        wp_send_json_success('Transaction voided and stock restored.');
+    // ✅ Validasi: Hanya pending/verified yang bisa diedit
+    if (!in_array($row->status, ['pending', 'verified'])) {
+        wp_send_json_error('Transaksi sudah diposting, tidak bisa diedit');
     }
-	
-public function get_pool_history() {
-    global $wpdb;
-    $table_trans = puri_table_name('T_POOL_TRANSACTIONS');
-    $table_cust  = $wpdb->prefix . "posts"; // Jika customer disimpan di WP Posts
 
-    // Ambil data pending hari ini
-    $results = $wpdb->get_results("
-        SELECT p.*, DATE_FORMAT(p.created_at, '%H:%i') as time 
-        FROM $table_trans p
-        WHERE p.status = 'pending' 
-        ORDER BY p.created_at DESC 
-        LIMIT 20
-    ");
+    // ✅ Parse items snapshot
+    $items_snapshot = json_decode($row->items_snapshot, true);
+    
+    if (empty($items_snapshot)) {
+        wp_send_json_error('Data item tidak valid');
+    }
 
-    $data = [];
-    foreach ($results as $r) {
-        $data[] = [
-            'ref_id'       => $r->ref_id,
-            'time'         => $r->time,
-            'trade_mode'   => $r->trade_mode,
-            'customer_name'=> $this->get_customer_name($r->customer_id), // Helper function Anda
-            'total_amount' => $r->total_amount,
-            'status'       => $r->status
+    // ✅ Rebuild cart structure untuk frontend
+    $cart_data = [];
+    foreach ($items_snapshot as $item) {
+        $cart_data[] = [
+            'id' => intval($item['item_id'] ?? $item['id'] ?? 0),
+            'item_id' => intval($item['item_id'] ?? $item['id'] ?? 0),
+            'sku' => $item['sku'] ?? '',
+            'name' => $item['name'] ?? '',
+            'denom' => floatval($item['denom'] ?? 0),
+            'qty' => floatval($item['qty'] ?? 0),
+            'rate' => floatval($item['rate'] ?? 0),
+            'total_valas' => floatval($item['qty'] ?? 0) * floatval($item['denom'] ?? 0),
+            'subtotal_idr' => floatval($item['qty'] ?? 0) * floatval($item['denom'] ?? 0) * floatval($item['rate'] ?? 0)
         ];
     }
 
-    wp_send_json_success($data);
-    wp_die();
+    wp_send_json_success([
+        'ref_id' => $row->ref_id,
+        'trade_mode' => $row->trade_mode,
+        'cust_id' => $row->customer_id,
+        'cart' => $cart_data,
+        'pay_method' => $row->payment_method,
+        'delivery_method' => $row->delivery_method ?? 'pickup'
+    ]);
 }
+
+
+/**
+ * AJAX: Void Pool Transaction (Soft Delete + Stock Reversal)
+ */
+public function void_pool_transaction() {
+    check_ajax_referer('puri_pos_checkout', 'nonce');
+    global $wpdb;
+
+    $ref_id = sanitize_text_field($_POST['ref_id'] ?? '');
+    
+    if (empty($ref_id)) {
+        wp_send_json_error('Reference ID tidak valid');
+    }
+
+    $tbl_pool = puri_table_name('T_POOL_TRANSACTIONS');
+    $tbl_pool_stock = puri_table_name('T_POOL_STOCK');
+    $tbl_stock = puri_table_name('T_STOCK');
+
+    // ✅ Cek apakah transaksi ada
+    $transaction = $wpdb->get_row($wpdb->prepare(
+        "SELECT * FROM {$tbl_pool} WHERE ref_id = %s",
+        $ref_id
+    ));
+
+    if (!$transaction) {
+        wp_send_json_error('Transaksi tidak ditemukan');
+    }
+
+    // ✅ Validasi: Hanya pending/verified yang bisa di-void
+    if (!in_array($transaction->status, ['pending', 'verified'])) {
+        wp_send_json_error('Transaksi sudah diposting, tidak bisa dihapus');
+    }
+
+    // ✅ START TRANSACTION
+    $wpdb->query('START TRANSACTION');
+
+    try {
+        // 1. Update status menjadi 'void'
+        $wpdb->update(
+            $tbl_pool,
+            ['status' => 'void', 'notes' => 'Voided by user at ' . current_time('mysql')],
+            ['ref_id' => $ref_id]
+        );
+
+        // 2. KEMBALIKAN STOK FISIK (Reverse movements)
+        $pool_items = $wpdb->get_results($wpdb->prepare(
+            "SELECT * FROM {$tbl_pool_stock} WHERE ref_id = %s",
+            $ref_id
+        ));
+
+        foreach ($pool_items as $item) {
+            $item_id = intval($item->item_id);
+            $location_id = $item->location_id;
+            $qty_change = floatval($item->qty_change);
+
+            // ✅ REVERSE: Jika dulu minus (sell), sekarang plus (kembalikan stok)
+            $reverse_qty = -1 * $qty_change;
+
+            // Update T_STOCK
+            $stock_exists = $wpdb->get_var($wpdb->prepare(
+                "SELECT id FROM {$tbl_stock} WHERE item_id = %d AND location_id = %s",
+                $item_id, $location_id
+            ));
+
+            if ($stock_exists) {
+                $wpdb->query($wpdb->prepare(
+                    "UPDATE {$tbl_stock} 
+                     SET balance = balance + %f, 
+                         updated_at = %s,
+                         last_ref = %s
+                     WHERE item_id = %d AND location_id = %s",
+                    $reverse_qty, 
+                    current_time('mysql'),
+                    'VOID-' . $ref_id,
+                    $item_id, 
+                    $location_id
+                ));
+            }
+        }
+
+        // ✅ COMMIT
+        $wpdb->query('COMMIT');
+
+        wp_send_json_success([
+            'message' => 'Transaksi berhasil dibatalkan dan stok dikembalikan',
+            'ref_id' => $ref_id
+        ]);
+
+    } catch (Exception $e) {
+        $wpdb->query('ROLLBACK');
+        error_log('❌ Void Error: ' . $e->getMessage());
+        wp_send_json_error('Gagal membatalkan transaksi: ' . $e->getMessage());
+    }
+}
+
+	
+public function get_pool_history() {
+    global $wpdb;
+    
+    $today_str = current_time('Y-m-d');
+    $tbl_pool = puri_table_name('T_POOL_TRANSACTIONS');
+    
+    // ✅ Ambil SEMUA transaksi hari ini (apapun statusnya)
+    $rows = $wpdb->get_results($wpdb->prepare(
+        "SELECT 
+            ref_id,
+            DATE_FORMAT(trx_date, '%%H:%%i') as time,
+            trade_mode,
+            customer_name,
+            total_riyal,
+            total_idr,
+            status,
+            payment_method,
+            created_by
+         FROM {$tbl_pool}
+         WHERE DATE(trx_date) = %s
+         ORDER BY trx_date DESC
+         LIMIT 100",
+        $today_str
+    ));
+    
+    // ✅ Hitung summary per status
+    $summary = [
+        'pending' => 0,
+        'verified' => 0,
+        'posted' => 0,
+        'void' => 0,
+        'total_idr' => 0
+    ];
+    
+    $data = [];
+    foreach ($rows as $r) {
+        // Accumulate summary
+        $summary[$r->status]++;
+        $summary['total_idr'] += floatval($r->total_idr);
+        
+        $data[] = [
+            'ref_id' => $r->ref_id,
+            'time' => $r->time,
+            'trade_mode' => $r->trade_mode,
+            'customer_name' => $r->customer_name,
+            'total_amount' => floatval($r->total_idr),
+            'status' => $r->status,
+            'cashier' => get_userdata($r->created_by)->display_name ?? 'Unknown'
+        ];
+    }
+    
+    wp_send_json_success([
+        'transactions' => $data,
+        'summary' => $summary
+    ]);
+}
+
 
     /**
      * Enqueue CSS/JS Assets
@@ -235,7 +363,7 @@ public function ajax_upload_customer_id() {
         $is_finance_or_admin = current_user_can('can_entry');
 		// Ambil lokasi default POS dari ACF option
 		$locations   = get_option('puri_inv_locations', []);
-		$default_loc = get_option('puri_pos_default_location', 'laci-kasir-01');	
+		$default_loc = get_option('puri_pos_default_location', 'laci_kasir');	
         ?>
         <div class="wrap puri-cockpit-wrapper">
             <h1 class="wp-heading-inline">
@@ -286,13 +414,17 @@ public function ajax_upload_customer_id() {
                                         <select id="customer_select" style="width: calc(100% - 45px);">
                                             <option value="">-- Select Customer --</option>
                                             <?php foreach($customers as $c): ?>
-                                                <option value="<?php echo $c->ID; ?>" 
-                                                        data-type="<?php echo esc_attr($c->type); ?>"
-                                                        data-phone="<?php echo esc_attr($c->phone); ?>"
-                                                        data-nik="<?php echo esc_attr($c->nik); ?>"
-                                                        data-address="<?php echo esc_attr($c->address); ?>">
-                                                    <?php echo esc_html($c->post_title); ?>
-                                                </option>
+<option value="<?php echo $c->ID; ?>" 
+        data-type="<?php echo esc_attr($c->type); ?>"
+        data-phone="<?php echo esc_attr($c->phone); ?>"
+        data-nik="<?php echo esc_attr($c->nik); ?>"
+        data-address="<?php echo esc_attr($c->address); ?>"
+        data-citizenship="<?php echo esc_attr($c->citizenship); ?>"
+        data-occupation="<?php echo esc_attr($c->occupation); ?>"
+        data-purpose="<?php echo esc_attr($c->purpose); ?>">
+    <?php echo esc_html($c->post_title); ?>
+</option>
+
                                             <?php endforeach; ?>
                                         </select>
                                         <button type="button" id="btn_add_customer" class="button button-primary" title="Quick Add Customer">
@@ -302,29 +434,33 @@ public function ajax_upload_customer_id() {
                                 </div>
 
                                 <!-- Customer Info Display -->
-                                <div id="customer_info_box" class="customer-info-box hidden">
-                                    <div class="info-row">
-                                        <span class="info-label"><i class="fa-solid fa-id-card"></i> NIK:</span>
-                                        <span id="info_nik" class="info-value">-</span>
-                                    </div>
-                                    <div class="info-row">
-                                        <span class="info-label"><i class="fa-solid fa-phone"></i> Phone:</span>
-                                        <span id="info_phone" class="info-value">-</span>
-                                    </div>
-                                    <div class="info-row">
-                                        <span class="info-label"><i class="fa-solid fa-location-dot"></i> Address:</span>
-                                        <span id="info_address" class="info-value">-</span>
-                                    </div>
-                                    <div class="info-row">
-                                        <span class="info-label"><i class="fa-duotone fa-solid fa-flag"></i> Citizenship:</span>
-                                        <span id="info_citizenship" class="info-value">-</span>
-                                    </div>
-                                    <div class="info-row">
-                                        <span class="info-label"><i class="fa-solid fa-location-dot"></i> Occupation:</span>
-                                        <span id="info_address" class="info-value">-</span>
-                                    </div>
-                                </div>
-
+<!-- Customer Info Display -->
+<div id="customer_info_box" class="customer-info-box hidden">
+    <div class="info-row">
+        <span class="info-label"><i class="fa-solid fa-id-card"></i> NIK:</span>
+        <span id="info_nik" class="info-value">-</span>
+    </div>
+    <div class="info-row">
+        <span class="info-label"><i class="fa-solid fa-phone"></i> Phone:</span>
+        <span id="info_phone" class="info-value">-</span>
+    </div>
+    <div class="info-row">
+        <span class="info-label"><i class="fa-solid fa-location-dot"></i> Address:</span>
+        <span id="info_address" class="info-value">-</span>
+    </div>
+    <div class="info-row">
+        <span class="info-label"><i class="fa-solid fa-flag"></i> Citizenship:</span>
+        <span id="info_citizenship" class="info-value">-</span>
+    </div>
+    <div class="info-row">
+        <span class="info-label"><i class="fa-solid fa-briefcase"></i> Occupation:</span>
+        <span id="info_occupation" class="info-value">-</span> <!-- ✅ FIX: ID yang benar -->
+    </div>
+    <div class="info-row">
+        <span class="info-label"><i class="fa-solid fa-plane"></i> Purpose:</span>
+        <span id="info_purpose" class="info-value">-</span> <!-- ✅ BONUS: Tambahkan Purpose -->
+    </div>
+</div>
                             </div>
                         </div>
                     </div>
@@ -346,9 +482,9 @@ public function ajax_upload_customer_id() {
 $items_table = $wpdb->prefix . 'puri_pr_master_items';
 $stock_table = $wpdb->prefix . 'puri_inventory_balance';
 
-
+// PERBAIKAN 1: Tambahkan t.sell_rate agar data rate tidak 0
 $items = $wpdb->get_results($wpdb->prepare("
-    SELECT t.id, t.wp_post_id, t.sku, t.name, t.denom_value,
+    SELECT t.id, t.wp_post_id, t.sku, t.name, t.denom_value, t.sell_rate,
            COALESCE(s.balance,0) AS stock_balance
     FROM {$items_table} t
     LEFT JOIN {$stock_table} s
@@ -358,22 +494,23 @@ $items = $wpdb->get_results($wpdb->prepare("
 ", $default_loc));
 ?>								
 		
-                                <div class="form-group mb-2">
-                                    <label class="small-label">Select Item (SKU) *</label>
-                                    <select id="item_select" class="puri-input">
-                                        <option value="" data-denom="0" data-rate="0">-- Select Item --</option>
-                                        <?php foreach($items as $it): ?>
-                                            <option value="<?php echo $it->ID; ?>" 
-                                                    data-denom="<?php echo esc_attr($it->denom); ?>"
-                                                    data-rate="<?php echo esc_attr($it->sell_rate); ?>"
-                                                    data-stock="<?php echo esc_attr($it->stock_balance); ?>"
-                                                    data-img="<?php echo esc_attr($it->img_url); ?>">
-                                                <?php echo esc_html($it->post_title); ?> (Stock: <?php echo $it->stock_laci; ?>)
-                                            </option>
-                                        <?php endforeach; ?>
-                                    </select>
-                                </div>
-
+<div class="form-group mb-2">
+    <label class="small-label">Select Item (SKU) *</label>
+    <select id="item_select" class="puri-input">
+        <option value="" data-denom="0" data-rate="0">-- Select Item --</option>
+        
+        <?php foreach($items as $it): ?>
+            <option value="<?php echo esc_attr($it->id); ?>" 
+                    data-sku="<?php echo esc_attr($it->sku); ?>"
+                    data-denom="<?php echo esc_attr($it->denom_value); ?>"
+                    data-rate="<?php echo esc_attr($it->sell_rate); ?>"
+                    data-stock="<?php echo esc_attr($it->stock_balance); ?>">
+                <?php echo esc_html($it->sku . ' - ' . $it->name . ' (Stok: ' . $it->stock_balance . ')'); ?>
+            </option>
+        <?php endforeach; ?>
+        
+    </select>
+</div>
                                 <!-- Transaction Input Grid -->
                                 <div class="transaction-grid">
                                     <div class="grid-item">
@@ -752,6 +889,23 @@ $items = $wpdb->get_results($wpdb->prepare("
 		.puri-modal { position: fixed; z-index: 99999; inset: 0; background-color: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; }
 		.puri-modal-content { background-color: #fff; border-radius: 8px; width: 90%; max-width: 600px; max-height: 
 
+/* --------------- Status Row Styling -------------*/
+tr.status-pending { background: #fffbeb; }
+tr.status-verified { background: #eff6ff; }
+tr.status-posted { background: #f0fdf4; opacity: 0.7; }
+tr.status-void { background: #fef2f2; opacity: 0.5; text-decoration: line-through; }
+
+/* --------------- Badge Styling -----------------*/
+.badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-size: 10px;
+    font-weight: bold;
+    text-transform: uppercase;
+}
+
+
 </style>
 
 
@@ -814,51 +968,269 @@ class CockpitPOS {
     this.applyModeGuard();
   }
 
-  bindEvents() {
+bindEvents() {
     // Mode Switcher
     $('input[name="trade_mode"]').on('change', e => {
-      this.tradeMode = e.target.value;
-      this.applyModeGuard();
+        this.tradeMode = e.target.value;
+        this.applyModeGuard();
     });
 
+    // Customer Dropdown Events
     this.$cust
-      .on('select2:select', () => this.selectCustomer())
-      .on('select2:clear',  () => this.clearCustomer());
+        .on('select2:select', () => this.selectCustomer())
+        .on('select2:clear',  () => this.clearCustomer());
 
+    // Item Selection
     this.$item.on('select2:select', () => this.selectItem());
 
+    // Calculation Inputs
     this.$qty.on('input',   () => this.syncFromQty());
     this.$riyal.on('input', () => this.syncFromRiyal());
     this.$rate.on('input',  () => this.calcFinalIDR());
 
+    // Cart Actions
     this.$btnAdd.on('click', () => this.addToCart());
     $('#btn_checkout').on('click', () => this.handleCheckout());
+    $('#btn_reset_cart').on('click', () => {
+        if (confirm('Reset cart?')) {
+            this.cart = [];
+            this.renderCart();
+            this.unlockSession();
+        }
+    });
 
-    // Event delegation untuk tombol hapus di cart
-    $(document).on('click','.btn-remove-item', e => 
-      this.removeItem($(e.currentTarget).data('index'))
+    // Item Removal (Event Delegation)
+    $(document).on('click', '.btn-remove-item', e => 
+        this.removeItem($(e.currentTarget).data('index'))
     );
 
+    // History Refresh
     $('#btn_refresh_history').on('click', () => this.loadStockAndHistory());
-  }
+
+    // Clear Form Button
+    $('#btn_clear_form').on('click', () => {
+        this.$item.val('').trigger('change');
+        this.$qty.val('');
+        this.$riyal.val('');
+        this.$rate.val('');
+        this.$idr.val('Rp 0');
+        $('#inp_denom').val('0');
+        $('#base_rate_hidden').val('0');
+        $('#current_stock').val('0');
+    });
+
+
+    // Open Modal
+    $('#btn_add_customer').on('click', () => {
+        $('#modal_add_customer').fadeIn(200);
+    });
+    
+    // Close Modal - X Button
+    $('.puri-modal-close').on('click', () => {
+        $('#modal_add_customer').fadeOut(200);
+    });
+    
+    // Close Modal - Background Click
+    $('#modal_add_customer').on('click', function(e) {
+        if ($(e.target).is('#modal_add_customer')) {
+            $(this).fadeOut(200);
+        }
+    });
+    
+    // Form Submission
+    $('#form_new_customer').on('submit', (e) => {
+        e.preventDefault();
+        this.submitNewCustomer();
+    });
+}
+
+
 
   /* ---------------- CUSTOMER LOGIC ---------------- */
-  selectCustomer() {
+selectCustomer() {
     const o = this.$cust.find(':selected');
-    this.currentCustomer = {
-      id: o.val(),
-      name: o.text(),
-      type: o.data('type') || 'Member'
-    };
-    $('#customer_info_box').removeClass('hidden');
-    this.checkRateEditable(this.currentCustomer.type);
-  }
+    
+    if (!o.val()) {
+        this.clearCustomer();
+        return;
+    }
 
-  clearCustomer() {
+    console.log('🔍 DEBUG Customer Selection:');
+    console.log('- Selected Value:', o.val());
+    console.log('- Customer Name:', o.text());
+    console.log('- Data NIK:', o.data('nik'));
+    console.log('- Data Phone:', o.data('phone'));
+    console.log('- Data Address:', o.data('address'));
+
+    
+    // Update internal state
+    this.currentCustomer = {
+        id: o.val(),
+        name: o.text(),
+        type: o.data('type') || 'member',
+        nik: o.data('nik') || '-',
+        phone: o.data('phone') || '-',
+        address: o.data('address') || '-',
+        citizenship: o.data('citizenship') || 'Indonesian',
+        purpose: o.data('purpose') || '-',
+        occupation: o.data('occupation') || '-'
+    };
+    
+    // ✅ UPDATE DOM ELEMENTS (THIS WAS MISSING!)
+    $('#info_nik').text(this.currentCustomer.nik);
+    $('#info_phone').text(this.currentCustomer.phone);
+    $('#info_address').text(this.currentCustomer.address);
+    $('#info_citizenship').text(this.currentCustomer.citizenship);
+    $('#info_occupation').text(this.currentCustomer.occupation);
+    $('#info_purpose').text(this.currentCustomer.purpose);
+    
+    // Show info box
+    $('#customer_info_box').removeClass('hidden');
+    
+    // Rate Editable Logic
+    // Agent dan Bank bisa edit rate manual
+    if (['agent', 'bank', 'moneychanger'].includes(this.currentCustomer.type)) {
+        this.$rate.prop('readonly', false).removeClass('bg-gray');
+        this.$rate.attr('placeholder', 'Custom rate for ' + this.currentCustomer.type);
+    } else {
+        this.$rate.prop('readonly', true).addClass('bg-gray');
+    }
+    
+    console.log('✅ Customer Selected:', this.currentCustomer);
+}
+
+// ============================================================================
+// PATCH 3: CLEAR CUSTOMER (Replace existing method)
+// ============================================================================
+clearCustomer() {
     this.currentCustomer = null;
+    
+    // Clear info display
+    $('#info_nik').text('-');
+    $('#info_phone').text('-');
+    $('#info_address').text('-');
+    $('#info_citizenship').text('-');
+    
+    // Hide info box
     $('#customer_info_box').addClass('hidden');
-    this.checkRateEditable('');
-  }
+    
+    // Reset rate to readonly
+    this.$rate.prop('readonly', true).addClass('bg-gray');
+}
+
+// ============================================================================
+// PATCH 4: SUBMIT NEW CUSTOMER (NEW METHOD)
+// ============================================================================
+async submitNewCustomer() {
+    const form = $('#form_new_customer')[0];
+    const fileInput = form.querySelector('[name="cust_id_image"]');
+    
+    // Validation
+    if (!form.cust_name.value.trim()) {
+        Swal.fire('Error', 'Customer name is required', 'error');
+        return;
+    }
+    
+    if (!form.cust_id_number.value.trim()) {
+        Swal.fire('Error', 'ID Number is required', 'error');
+        return;
+    }
+    
+    Swal.fire({
+        title: 'Uploading...',
+        text: 'Please wait',
+        didOpen: () => Swal.showLoading()
+    });
+    
+    let attachmentId = 0;
+    
+    // ========================================================================
+    // STEP 1: Upload Image First (if exists)
+    // ========================================================================
+    if (fileInput && fileInput.files.length > 0) {
+        const uploadData = new FormData();
+        uploadData.append('action', 'puri_pos_upload_customer_id');
+        uploadData.append('security', '<?php echo wp_create_nonce("puri_pos_nonce"); ?>');
+        uploadData.append('customer_id_file', fileInput.files[0]);
+        uploadData.append('id_type', form.cust_id_type.value);
+        uploadData.append('customer_name', form.cust_name.value);
+        uploadData.append('customer_id', form.cust_id_number.value);
+        
+        try {
+            const uploadResult = await $.ajax({
+                url: ajaxurl,
+                type: 'POST',
+                data: uploadData,
+                processData: false,
+                contentType: false
+            });
+            
+            if (uploadResult.success) {
+                attachmentId = uploadResult.data.attachment_id;
+                console.log('✅ Image uploaded, ID:', attachmentId);
+            } else {
+                throw new Error(uploadResult.data || 'Upload failed');
+            }
+        } catch (err) {
+            Swal.fire('Upload Failed', err.message || 'Image upload error', 'error');
+            return;
+        }
+    }
+  
+    // ========================================================================
+    // STEP 2: Create Customer with Image Attachment ID
+    // ========================================================================
+    const formData = new FormData(form);
+    formData.append('action', 'puri_pos_create_customer');
+    formData.append('nonce', '<?php echo wp_create_nonce("puri_pos_create_customer"); ?>');
+    formData.append('attachment_id', attachmentId);
+    
+    // Remove file from FormData (already uploaded)
+    formData.delete('cust_id_image');
+    
+    try {
+        const result = await $.ajax({
+            url: ajaxurl,
+            type: 'POST',
+            data: formData,
+            processData: false,
+            contentType: false
+        });
+        
+        if (result.success) {
+            // Close modal
+            $('#modal_add_customer').fadeOut(200);
+            form.reset();
+            
+            // Add to dropdown with data attributes
+            const newOption = new Option(result.data.name, result.data.id, true, true);
+            $(newOption).attr({
+                'data-type': result.data.type || 'member',
+                'data-nik': result.data.nik,
+                'data-phone': result.data.phone,
+                'data-address': result.data.address,
+                'data-citizenship': result.data.citizenship || 'Indonesian'
+            });
+            
+            this.$cust.append(newOption).trigger('change');
+            
+            Swal.fire({
+                icon: 'success',
+                title: 'Customer Created!',
+                text: 'Customer has been added to the system',
+                timer: 2000,
+                showConfirmButton: false
+            });
+            
+            console.log('✅ Customer created:', result.data);
+        } else {
+            throw new Error(result.data || 'Failed to create customer');
+        }
+    } catch (err) {
+        Swal.fire('Failed', err.message || 'Server error', 'error');
+    }
+}
+
 
   /* ---------------- CALCULATION LOGIC ---------------- */
   selectItem() {
@@ -954,66 +1326,150 @@ class CockpitPOS {
 /* =====================================================
    * RENDER HISTORY (POOL MONITOR)
    * ===================================================== */
-  renderHistoryTable() {
+renderHistoryTable() {
     const $tb = $('#history_table tbody').empty();
     
-    if (!this.historyData || this.historyData.length === 0) {
-      $tb.html('<tr><td colspan="5" align="center" style="padding:20px;">Belum ada transaksi di pool hari ini.</td></tr>');
-      return;
+    if (!this.historyData.transactions || this.historyData.transactions.length === 0) {
+        $tb.html('<tr><td colspan="5" align="center" style="padding:20px; color:#999;">Belum ada transaksi hari ini.</td></tr>');
+        return;
     }
 
-    this.historyData.forEach((h, index) => {
-      // Styling berdasarkan mode
-      const modeColor = h.trade_mode === 'sell' ? '#2271b1' : '#d63638';
-      const modeLabel = h.trade_mode === 'sell' ? 'JUAL' : 'BELI';
-      
-      $tb.append(`
-        <tr class="pool-row">
-          <td class="tc"><strong>${h.time}</strong></td>
-          <td>
-            <span class="badge-mode" style="background:${modeColor}; color:#fff; padding:2px 6px; border-radius:3px; font-size:10px;">
-              ${modeLabel}
-            </span>
-            <code style="font-weight:bold; margin-left:5px;">${h.ref_id}</code>
-          </td>
-          <td>${h.customer_name || 'Walking Customer'}</td>
-          <td class="tr" style="font-family:monospace; font-weight:bold;">
-            ${U.idr(h.total_amount)}
-          </td>
-          <td class="tc">
-            <div class="btn-group-history">
-              <button onclick="window.Cockpit.editFromPool('${h.ref_id}')" class="button button-small" title="Edit Transaksi">
+    this.historyData.transactions.forEach((h) => {
+        // ✅ Status Badge dengan warna berbeda
+        const statusBadges = {
+            'pending': '<span class="badge" style="background:#f59e0b; color:#fff;">⏳ Pending</span>',
+            'verified': '<span class="badge" style="background:#3b82f6; color:#fff;">✓ Verified</span>',
+            'posted': '<span class="badge" style="background:#10b981; color:#fff;">✅ Posted</span>',
+            'void': '<span class="badge" style="background:#ef4444; color:#fff;">❌ Void</span>'
+        };
+        
+        const statusBadge = statusBadges[h.status] || h.status;
+        
+        // Mode badge
+        const modeColor = h.trade_mode === 'sell' ? '#2271b1' : '#d63638';
+        const modeIcon = h.trade_mode === 'sell' ? 'fa-arrow-down' : 'fa-arrow-up';
+        const modeLabel = h.trade_mode === 'sell' ? 'JUAL' : 'BELI';
+        
+        // ✅ Disable action buttons jika sudah posted/void
+        const canEdit = (h.status === 'pending' || h.status === 'verified');
+        const actionButtons = canEdit ? `
+            <button onclick="window.Cockpit.editFromPool('${h.ref_id}')" 
+                    class="button button-small" title="Edit">
                 <i class="fa fa-pencil-alt" style="color:#2271b1"></i>
-              </button>
-
-              <button onclick="window.Cockpit.confirmVoid('${h.ref_id}')" class="button button-small" title="Hapus Permanen">
+            </button>
+            <button onclick="window.Cockpit.confirmVoid('${h.ref_id}')" 
+                    class="button button-small" title="Void">
                 <i class="fa fa-trash" style="color:#d63638"></i>
-              </button>
-            </div>
-          </td>
-        </tr>
-      `);
+            </button>
+        ` : `
+            <span style="color:#999; font-size:10px;">Locked</span>
+        `;
+        
+        $tb.append(`
+            <tr class="status-${h.status}">
+                <td class="tc"><strong>${h.time}</strong></td>
+                <td>
+                    <div style="display:flex; align-items:center; gap:5px; flex-wrap:wrap;">
+                        <span class="badge-mode" style="background:${modeColor}; color:#fff; padding:2px 6px; border-radius:3px; font-size:10px;">
+                            <i class="fa ${modeIcon}"></i> ${modeLabel}
+                        </span>
+                        ${statusBadge}
+                    </div>
+                    <code style="font-weight:bold; margin-top:3px; display:block;">${h.ref_id}</code>
+                    <small style="color:#666;">${h.customer_name} | ${h.cashier}</small>
+                </td>
+                <td class="tr" style="font-family:monospace; font-weight:bold; color:${modeColor};">
+                    ${h.trade_mode === 'sell' ? '+' : '-'} ${U.idr(h.total_amount)}
+                </td>
+                <td class="tc">
+                    ${actionButtons}
+                </td>
+            </tr>
+        `);
     });
-  }
+    
+    // ✅ Update summary badge di header
+    if (this.historyData.summary) {
+        const s = this.historyData.summary;
+        $('#box_history_summary').removeClass('hidden').html(`
+            <span style="color:#f59e0b; font-weight:700;">⏳ ${s.pending}</span> |
+            <span style="color:#3b82f6; font-weight:700;">✓ ${s.verified}</span> |
+            <span style="color:#10b981; font-weight:700;">✅ ${s.posted}</span> |
+            <span style="color:#d63638; font-weight:700;">Total: Rp ${U.idr(s.total_idr)}</span>
+        `);
+    }
+}
+
+
 
   // Helper untuk konfirmasi penghapusan (Void)
-  confirmVoid(refId) {
+confirmVoid(refId) {
     Swal.fire({
-      title: 'Hapus Transaksi?',
-      text: "Data akan dihapus dari Pool dan stok fisik dikembalikan.",
-      icon: 'error',
-      showCancelButton: true,
-      confirmButtonColor: '#d63638',
-      confirmButtonText: 'Ya, Hapus!'
+        title: 'Hapus Transaksi?',
+        html: `
+            <p>Transaksi <code>${refId}</code> akan dibatalkan.</p>
+            <p><strong>Stok fisik akan dikembalikan.</strong></p>
+        `,
+        icon: 'error',
+        showCancelButton: true,
+        confirmButtonColor: '#d63638',
+        confirmButtonText: 'Ya, Hapus!',
+        cancelButtonText: 'Batal'
     }).then((result) => {
-      if (result.isConfirmed) {
-        this.silentVoid(refId); // Menggunakan fungsi yang kita buat di Part 3.1
-        Swal.fire('Deleted', 'Transaksi berhasil dihapus.', 'success');
-        this.loadStockAndHistory(); // Refresh tabel
-      }
-    });
-  }
+        if (result.isConfirmed) {
+            // ✅ Tampilkan loading
+            Swal.fire({
+                title: 'Processing...',
+                text: 'Membatalkan transaksi',
+                didOpen: () => Swal.showLoading()
+            });
 
+            U.ajax({
+                data: {
+                    action: 'puri_pos_void_pool_transaction',
+                    ref_id: refId,
+                    nonce: '<?php echo wp_create_nonce("puri_pos_checkout"); ?>'
+                },
+                success: (r) => {
+                    if (r.success) {
+                        Swal.fire({
+                            icon: 'success',
+                            title: 'Deleted!',
+                            text: r.data.message || 'Transaksi berhasil dibatalkan',
+                            timer: 2000
+                        });
+                        
+                        // ✅ Refresh history & stock
+                        this.loadStockAndHistory();
+                    } else {
+                        Swal.fire('Failed', r.data || 'Gagal menghapus transaksi', 'error');
+                    }
+                },
+                error: (xhr, status, err) => {
+                    console.error('❌ AJAX Error:', xhr.responseText);
+                    Swal.fire('Error', 'Network error: ' + err, 'error');
+                }
+            });
+        }
+    });
+}
+
+// ✅ Silent void (untuk edit flow)
+silentVoid(refId) {
+    U.ajax({
+        data: { 
+            action: 'puri_pos_void_pool_transaction', 
+            ref_id: refId,
+            nonce: '<?php echo wp_create_nonce("puri_pos_checkout"); ?>'
+        },
+        success: (r) => {
+            console.log('✅ Silent void success:', refId);
+        },
+        error: (xhr) => {
+            console.error('❌ Silent void failed:', xhr.responseText);
+        }
+    });
+}
 
 /* =====================================================
  * EDIT FROM POOL LOGIC  - CRUD SCHEME
@@ -1028,6 +1484,13 @@ editFromPool(refId) {
         confirmButtonText: 'Ya, Bongkar Keranjang'
     }).then((result) => {
         if (result.isConfirmed) {
+            // ✅ Tampilkan loading
+            Swal.fire({
+                title: 'Loading...',
+                text: 'Mengambil data transaksi',
+                didOpen: () => Swal.showLoading()
+            });
+
             U.ajax({
                 data: { 
                     action: 'puri_pos_get_pool_snapshot', 
@@ -1036,39 +1499,58 @@ editFromPool(refId) {
                 },
                 success: (r) => {
                     if (r.success) {
-                        // 1. Restore State
+                        // 1. Restore cart state
                         this.cart = r.data.cart;
                         this.tradeMode = r.data.trade_mode;
-						this.currentEditRef = refId; // Simpan ID lama untuk tracking checkout ulang
+                        this.currentEditRef = refId;
                         
-                        // 2. Update UI Radio Button Mode
+                        // 2. Update UI - Trade mode radio
                         $(`input[name="trade_mode"][value="${this.tradeMode}"]`).prop('checked', true);
                         
-                        // 3. Update Customer (Trigger Select2)
+                        // 3. Update customer selection
                         this.$cust.val(r.data.cust_id).trigger('change');
                         
-                        // 4. Update Payment Method
+                        // 4. Update payment method
                         this.$payMethod.val(r.data.pay_method);
+                        
+                        // 5. Update delivery method
+                        $('#delivery_method').val(r.data.delivery_method);
 
-                        // 5. Render & Lock
+                        // 6. Render cart & apply mode guard
                         this.renderCart();
                         this.applyModeGuard();
-                        this.lockSession(); // Kunci mode agar tidak berubah saat edit
+                        this.lockSession();
 
-                        // 6. Jalankan Fungsi Hapus/Void pada data lama di Pool
-                        // Agar tidak double saat di-checkout ulang nanti
+                        // 7. Void transaksi lama (silent mode)
                         this.silentVoid(refId);
 
-                        Swal.fire('Restored', 'Silakan lakukan perbaikan.', 'success');
+                        Swal.fire({
+                            icon: 'success',
+                            title: 'Restored!',
+                            text: 'Silakan lakukan perbaikan dan checkout ulang.',
+                            timer: 2000
+                        });
+
+                        // ✅ Scroll ke panel transaction
+                        $('html, body').animate({
+                            scrollTop: $('#panelInputTransaksi').offset().top - 100
+                        }, 500);
+
                     } else {
-                        Swal.fire('Error', r.data, 'error');
+                        Swal.fire('Error', r.data || 'Gagal mengambil data', 'error');
                     }
+                },
+                error: (xhr, status, err) => {
+                    console.error('❌ AJAX Error:', xhr.responseText);
+                    Swal.fire('Error', 'Network error: ' + err, 'error');
                 }
             });
         }
     });
 }
 
+
+/* ==============================
 silentVoid(refId) {
     U.ajax({
         data: { 
@@ -1078,7 +1560,7 @@ silentVoid(refId) {
         }
     });
 }
-
+==================================== */
 
 
   /* ---------------- SESSION & DATA ---------------- */
@@ -1138,6 +1620,9 @@ silentVoid(refId) {
     const fd = new FormData();
     fd.append('action', 'puri_pos_checkout');
     fd.append('nonce',  '<?php echo wp_create_nonce("puri_pos_checkout"); ?>');
+	
+	
+	
     fd.append('cart',   JSON.stringify(this.cart)); // Sekarang isinya key Mozart
     fd.append('trade_mode', this.tradeMode);
     fd.append('cust_id',    this.currentCustomer.id);
@@ -1187,8 +1672,16 @@ jQuery(document).ready(function($) { if (typeof lucide !== 'undefined') { lucide
      * Get Items for Dropdown
      * Fetches all published items with stock info
      */
+/**
+     * Get Items for Dropdown
+     * Fetches all published items with stock info based on POS Default Location
+     */
     private function get_items_for_dropdown() {
         global $wpdb;
+        
+        // AMBIL DARI OPTION (Anti-Hardcode)
+        $default_loc = get_option('puri_pos_default_location', 'laci_kasir');
+
         $posts = get_posts([
             'post_type' => 'pr_item',
             'posts_per_page' => -1,
@@ -1210,13 +1703,16 @@ jQuery(document).ready(function($) { if (typeof lucide !== 'undefined') { lucide
             $stock = 0;
 
             if ($sku && $tbl_items) {
+                // UPDATE QUERY: Menggunakan %s untuk location_id
                 $query = "SELECT (COALESCE(s.balance, 0) - COALESCE(l.qty_lock, 0)) as ready_stock, 
                                  i.denom_value, i.sell_rate 
                           FROM {$tbl_items} i 
-                          LEFT JOIN {$tbl_stock} s ON i.id = s.item_id AND s.location_id = 'laci_kasir' 
+                          LEFT JOIN {$tbl_stock} s ON i.id = s.item_id AND s.location_id = %s 
                           LEFT JOIN {$tbl_locks} l ON i.id = l.item_id 
                           WHERE i.sku = %s LIMIT 1";
-                $engine_data = $wpdb->get_row($wpdb->prepare($query, $sku));
+                
+                // Masukkan $default_loc ke prepare
+                $engine_data = $wpdb->get_row($wpdb->prepare($query, $default_loc, $sku));
                 
                 if ($engine_data) {
                     $stock = $engine_data->ready_stock;
@@ -1238,7 +1734,7 @@ jQuery(document).ready(function($) { if (typeof lucide !== 'undefined') { lucide
 
         return $results;
     }
-
+	
     /**
      * Get Customers for Dropdown
      */
@@ -1257,9 +1753,9 @@ jQuery(document).ready(function($) { if (typeof lucide !== 'undefined') { lucide
             $phone = get_post_meta($p->ID, '_puri_cust_phone', true) ?: '-';
             $nik = get_post_meta($p->ID, '_puri_cust_nik', true) ?: '-';
             $address = get_post_meta($p->ID, '_puri_cust_address', true) ?: '-';
-            $citizenship = get_post_meta($p->ID, '_puri_cust_address', true) ?: '-';
-            $occupation = get_post_meta($p->ID, '_puri_cust_address', true) ?: '-';
-            $needfor = get_post_meta($p->ID, '_puri_cust_address', true) ?: '-';
+            $citizenship = get_post_meta($p->ID, '_puri_cust_citizenship', true) ?: '-';
+            $occupation = get_post_meta($p->ID, '_puri_cust_occupation', true) ?: '-';
+            $purpose = get_post_meta($p->ID, '_puri_cust_purpose', true) ?: '-';
             
             $p->type = $type;
             $p->phone = $phone;
@@ -1267,7 +1763,7 @@ jQuery(document).ready(function($) { if (typeof lucide !== 'undefined') { lucide
             $p->address = $address;
             $p->citizenship = $citizenship;
             $p->occupation = $occupation;
-            $p->needfor= $needfor;
+            $p->purpose= $purpose;
             $results[] = $p;
         }
         return $results;
@@ -1316,10 +1812,15 @@ jQuery(document).ready(function($) { if (typeof lucide !== 'undefined') { lucide
 
 		// A. Update field ACF
         update_field('cust_address', $cust_address, $post_id);
-		update_field('cust_nik', $cust_nik, $post_id);
+		update_field('cust_city', $cust_city, $post_id);
+		update_field('cust_id_type', $cust_id_type, $post_id);
+        update_field('cust_nik', $cust_nik, $post_id);
         update_field('cust_phone', $cust_phone, $post_id);
         update_field('cust_ktp_image', $attachment_id, $post_id); // SEKARANG TERSEDIA
         update_field('cust_type', $ctype, $post_id);
+        update_field('cust_occupation', $occupation, $post_id);
+        update_field('cust_citizenship', $citizenship, $post_id);
+        update_field('cust_purpose', $purpose, $post_id);
 		
         // B. Save meta
         update_post_meta($customer_id, '_puri_cust_address', $address );
@@ -1375,68 +1876,174 @@ public function ajax_process_checkout() {
     check_ajax_referer('puri_pos_checkout', 'nonce');
     global $wpdb;
 
-    // 1. Generate Reference ID
+    // ========================================================================
+    // 1. COLLECT & VALIDATE INPUT
+    // ========================================================================
+    $customer_id = intval($_POST['cust_id'] ?? $_POST['customer_id'] ?? 0);
+    $items_raw = json_decode(stripslashes($_POST['cart'] ?? $_POST['items'] ?? '[]'), true);
+    $trade_mode = sanitize_text_field($_POST['trade_mode'] ?? 'sell');
+    $payment_method = sanitize_text_field($_POST['payment_method'] ?? 'cash');
+    $delivery_method = sanitize_text_field($_POST['delivery_method'] ?? 'pickup');
+    $location_id = sanitize_text_field($_POST['location_id'] ?? get_option('puri_pos_default_location', 'laci_kasir'));
+
+    if ($customer_id <= 0) {
+        wp_send_json_error(['message' => 'Pilih customer terlebih dahulu']);
+    }
+
+    if (empty($items_raw)) {
+        wp_send_json_error(['message' => 'Keranjang masih kosong']);
+    }
+
+    // ========================================================================
+    // 2. GET CUSTOMER INFO
+    // ========================================================================
+    $customer = get_post($customer_id);
+    $customer_name = $customer ? $customer->post_title : 'Unknown Customer';
+    $customer_nik = get_post_meta($customer_id, '_puri_cust_nik', true) ?: '-';
+
+    // ========================================================================
+    // 3. GENERATE REFERENCE ID
+    // ========================================================================
     $ref_id = 'POS-' . current_time('Ymd') . '-' . strtoupper(wp_generate_password(4, false));
 
-    // 2. Ambil data dari POST
-    $customer_id   = intval($_POST['customer_id'] ?? 0);
-    $trade_mode    = sanitize_text_field($_POST['trade_mode'] ?? 'sell');
-    $payment_method= sanitize_text_field($_POST['payment_method'] ?? 'cash');
-    $delivery      = sanitize_text_field($_POST['delivery_method'] ?? 'pickup');
-    $items_raw     = $_POST['items'] ?? [];
-	// Ambil location_id dari POST atau fallback ke default ACF option
-	$location_id   = sanitize_text_field($_POST['location_id'] ?? get_option('puri_pos_default_location', 'laci-kasir-01'));
+    // ========================================================================
+    // 4. CALCULATE TOTALS
+    // ========================================================================
+    $total_riyal = 0;
+    $total_idr = 0;
+    $total_hpp = 0;
 
-    // 3. Build items payload (Mozart format)
-    $items_payload = [];
+    $tbl_items = puri_table_name('T_ITEMS');
+    $tbl_stock = puri_table_name('T_STOCK');
+
     foreach ($items_raw as $it) {
-        $item_id = intval($it['item_id']);
-        $qty     = intval($it['qty']);
-        $rate    = floatval($it['rate']);
-        $denom   = intval($it['denom']);
+        $qty = floatval($it['qty'] ?? 0);
+        $denom = floatval($it['denom'] ?? 0);
+        $rate = floatval($it['rate'] ?? 0);
+
+        $riyal = $qty * $denom;
+        $idr = $riyal * $rate;
+
+        $total_riyal += $riyal;
+        $total_idr += $idr;
+
+        // Get cost_avg untuk HPP (hanya untuk SELL)
+        if ($trade_mode === 'sell') {
+            $item_id = intval($it['item_id'] ?? $it['id'] ?? 0);
+            $cost_avg = $wpdb->get_var($wpdb->prepare(
+                "SELECT COALESCE(cost_avg, 0) FROM {$tbl_stock} 
+                 WHERE item_id = %d AND location_id = %s",
+                $item_id, $location_id
+            ));
+            $total_hpp += $riyal * floatval($cost_avg);
+        }
+    }
+
+    // ========================================================================
+    // 5. INSERT INTO T_POOL_TRANSACTIONS (MAIN TABLE)
+    // ========================================================================
+    $tbl_pool = puri_table_name('T_POOL_TRANSACTIONS');
+    
+    $insert_result = $wpdb->insert($tbl_pool, [
+        'ref_id' => $ref_id,
+        'trx_date' => current_time('mysql'),
+        'trade_mode' => $trade_mode,
+        'customer_id' => $customer_id,
+        'customer_name' => $customer_name,
+        'customer_nik' => $customer_nik,
+        'payment_method' => $payment_method,
+        'delivery_method' => $delivery_method,
+        'total_riyal' => $total_riyal,
+        'total_idr' => $total_idr,
+        'total_hpp' => $total_hpp,
+        'items_snapshot' => json_encode($items_raw), // ✅ Simpan cart asli
+        'status' => 'pending',
+        'created_by' => get_current_user_id(),
+        'created_at' => current_time('mysql')
+    ]);
+
+    if (!$insert_result) {
+        error_log('❌ Pool Insert Error: ' . $wpdb->last_error);
+        wp_send_json_error(['message' => 'Gagal menyimpan ke pool: ' . $wpdb->last_error]);
+    }
+
+    // ========================================================================
+    // 6. INSERT INTO T_POOL_STOCK (SHADOW STOCK)
+    // ========================================================================
+    $tbl_pool_stock = puri_table_name('T_POOL_STOCK');
+    
+    foreach ($items_raw as $it) {
+        $item_id = intval($it['item_id'] ?? $it['id'] ?? 0);
+        $qty = floatval($it['qty'] ?? 0);
+        $denom = floatval($it['denom'] ?? 0);
 
         if ($item_id <= 0 || $qty <= 0) continue;
 
-        $items_payload[] = [
-            'item_id'    => $item_id,   // gunakan ID dari master_items
-            'qty'        => $qty,
-            'denom'      => $denom,
-            'rate'       => $rate,
-            'subtotal'   => $qty * $denom * $rate
-        ];
+        // ✅ Get wp_post_id
+        $wp_post_id = $wpdb->get_var($wpdb->prepare(
+            "SELECT wp_post_id FROM {$tbl_items} WHERE id = %d",
+            $item_id
+        ));
+
+        // Direction: SELL = minus, BUY = plus
+        $qty_change = ($trade_mode === 'sell') ? -$qty : $qty;
+
+        $wpdb->insert($tbl_pool_stock, [
+            'ref_id' => $ref_id,
+            'item_id' => $item_id,
+            'wp_post_id' => $wp_post_id ?: 0,
+            'location_id' => $location_id,
+            'qty_change' => $qty_change,
+            'created_at' => current_time('mysql')
+        ]);
     }
 
-    // 4. Build payments payload
-    $payments_payload = [[
-        'method' => $payment_method,
-        'amount' => array_sum(array_column($items_payload, 'subtotal')),
-        'delivery'=> $delivery
-    ]];
+    // ========================================================================
+    // 7. UPDATE T_STOCK (REAL INVENTORY) - For Stock Validation
+    // ========================================================================
+    foreach ($items_raw as $it) {
+        $item_id = intval($it['item_id'] ?? $it['id'] ?? 0);
+        $qty = floatval($it['qty'] ?? 0);
 
-    // 5. Assemble Mozart Transaction Parameter
-    $trx_param = [
-        'source'          => 'pos',
-        'source_ref'      => $ref_id,
-        'trade_mode'      => $trade_mode,
-        'customer_id'     => $customer_id,
-        'location_id'     => $location_id,
-        'items'           => $items_payload,
-        'payments'        => $payments_payload,
-        'created_at'      => current_time('mysql'),
-        'created_by'      => get_current_user_id(),
-        'snapshot_json'   => json_encode($items_payload)
-    ];
+        if ($item_id <= 0 || $qty <= 0) continue;
 
-    // 6. Execute via Mozart
-    $result = puri_mozart()->execute('pos_checkout', $trx_param);
+        // Direction
+        $qty_change = ($trade_mode === 'sell') ? -$qty : $qty;
 
-    if (is_wp_error($result)) {
-        wp_send_json_error(['message' => $result->get_error_message()]);
+        // ✅ UPSERT ke T_STOCK
+        $exists = $wpdb->get_var($wpdb->prepare(
+            "SELECT id FROM {$tbl_stock} WHERE item_id = %d AND location_id = %s",
+            $item_id, $location_id
+        ));
+
+        if ($exists) {
+            $wpdb->query($wpdb->prepare(
+                "UPDATE {$tbl_stock} SET balance = balance + %f, updated_at = %s 
+                 WHERE item_id = %d AND location_id = %s",
+                $qty_change, current_time('mysql'), $item_id, $location_id
+            ));
+        } else {
+            $wpdb->insert($tbl_stock, [
+                'item_id' => $item_id,
+                'location_id' => $location_id,
+                'balance' => $qty_change,
+                'updated_at' => current_time('mysql')
+            ]);
+        }
     }
 
-    wp_send_json_success(['ref_id' => $ref_id]);
+    // ========================================================================
+    // 8. SUCCESS RESPONSE
+    // ========================================================================
+    wp_send_json_success([
+        'ref_id' => $ref_id,
+        'status' => 'pending',
+        'message' => 'Transaksi tersimpan di pool, menunggu EOD posting',
+        'total_riyal' => $total_riyal,
+        'total_idr' => $total_idr,
+        'items_count' => count($items_raw)
+    ]);
 }
-
 
 
 /**
@@ -1543,25 +2150,29 @@ public function ajax_get_daily_mutation() {
 }
 
 
-    /**
+/**
      * AJAX: Get Stock Summary
-     * Back-calculation logic for opening balance
+     * Back-calculation logic for opening balance based on Dynamic Location
      */
     public function ajax_get_stock_summary() {
         global $wpdb;
         $start_date = date('Y-m-01 00:00:00');
         $end_date = date('Y-m-t 23:59:59');
+        
+        // AMBIL DARI OPTION (Bisa juga dikirim via POST jika ingin multi-lokasi di masa depan)
+        $target_loc = sanitize_text_field($_POST['location_id'] ?? get_option('puri_pos_default_location', 'laci_kasir'));
 
         // Ledger data: separate IN and OUT
+        // UPDATE QUERY: location_id = %s
         $ledger_data = $wpdb->get_results($wpdb->prepare(
             "SELECT item_id, 
                     SUM(CASE WHEN qty_change > 0 THEN qty_change ELSE 0 END) as qty_in,
                     SUM(CASE WHEN qty_change < 0 THEN ABS(qty_change) ELSE 0 END) as qty_out
              FROM " . puri_table_name('T_LEDGER') . " 
-             WHERE location_id = 'laci_kasir' 
+             WHERE location_id = %s 
              AND trx_date >= %s AND trx_date <= %s 
              GROUP BY item_id",
-            $start_date, $end_date
+            $target_loc, $start_date, $end_date
         ));
 
         // Map for quick access
@@ -1574,14 +2185,15 @@ public function ajax_get_daily_mutation() {
         }
 
         // Get items with current stock
-        $items = $wpdb->get_results("
+        // UPDATE QUERY: location_id = %s
+        $items = $wpdb->get_results($wpdb->prepare("
             SELECT i.id, i.name, i.sku, i.type, i.denom_value, 
                    s.balance as stock_phys, l.qty_lock 
             FROM " . puri_table_name('T_ITEMS') . " i 
-            LEFT JOIN " . puri_table_name('T_STOCK') . " s ON i.id = s.item_id AND s.location_id = 'laci_kasir' 
+            LEFT JOIN " . puri_table_name('T_STOCK') . " s ON i.id = s.item_id AND s.location_id = %s 
             LEFT JOIN " . puri_table_name('T_LOCKS') . " l ON i.id = l.item_id 
             WHERE i.type IN ('currency', 'package')
-        ");
+        ", $target_loc));
 
         $final_data = [];
         foreach ($items as $it) {
@@ -1619,7 +2231,8 @@ public function ajax_get_daily_mutation() {
 
         wp_send_json_success($final_data);
     }
-
+	
+	
 } // End Class
 
 
@@ -1639,7 +2252,7 @@ if (!function_exists('allnew_pos_render_page')) {
     function allnew_pos_render_page() {
         global $puri_cockpit_pos;
 		$locations = get_option('puri_inv_locations', []);
-		$default_loc = get_option('puri_pos_default_location', 'laci-kasir-01');
+		$default_loc = get_option('puri_pos_default_location', 'laci_kasir');
         if ($puri_cockpit_pos instanceof Puri_Cockpit_POS) {
             $puri_cockpit_pos->allnew_pos_render_page();
         } else {

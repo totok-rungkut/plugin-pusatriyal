@@ -331,6 +331,9 @@ dbDelta($sql_eod_batches);
 }
 add_action('admin_init', 'puri_core_db_install', 5);
 
+// ------------ paksa administrator sebagai Gods Mode ------------------
+add_action('init', 'puri_activate_user_roles', 15);
+
 /*-------------------------------------------------------------
 * Helper sementara untuk default location_id = 'gudang-00'
 *
@@ -342,6 +345,24 @@ if (!function_exists('puri_get_default_location')) {
         return $locations[0]['id'] ?? 'gudang-00';
     }
 }
+if (!function_exists('puri_get_procurement_location')) {
+    function puri_get_procurement_location() {
+        $locations = get_option('puri_inv_locations', [['id'=>'gudang-00','name'=>'Gudang Utama']]);
+        return $locations[0]['id'] ?? 'gudang-00';
+    }
+}
+
+/*-------------------------------------------------------------
+* Helper default untuk POS (Laci Kasir)
+-------------------------------------------------------------*/
+if (!function_exists('puri_get_pos_location')) {
+    function puri_get_pos_location() {
+        // Ambil dari option khusus POS, fallback ke slug laci_kasir
+        return get_option('puri_pos_default_location', 'laci_kasir');
+    }
+}
+
+
 
 /**
  * Auto-seeding Chart of Accounts (CoA)

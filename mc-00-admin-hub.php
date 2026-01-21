@@ -279,6 +279,23 @@ add_action('admin_notices', function() {
     }
 });
 
+// Jebakan untuk melacak siapa menulis meta
+add_action('updated_post_meta', function($meta_id, $object_id, $meta_key, $meta_value){
+    error_log("UPDATED META: post={$object_id}, key={$meta_key}, value={$meta_value}");
+    // tampilkan di browser console
+    echo "<script>console.log('UPDATED META', {
+        post_id: '{$object_id}',
+        key: '{$meta_key}',
+        value: '{$meta_value}'
+    });</script>";
+}, 10, 4);
+
+add_action('added_post_meta', function($meta_id, $object_id, $meta_key, $meta_value){
+    error_log("ADDED META: post={$object_id}, key={$meta_key}, value={$meta_value}");
+}, 10, 4);
+
+
+
 /************** NOTE *****
 
 Catatan berikut jangan dihapus walaupun di-REFACTOR: 
