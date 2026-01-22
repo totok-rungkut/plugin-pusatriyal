@@ -6,7 +6,7 @@
  * 
  * @package     Puri_Money_Changer
  * @subpackage  Cockpit_POS
- * @version     7.8.40 (UX Restructured - Pool Transaction Phase 1)
+ * @version     7.9.0 (UX Restructured - Pool Transaction Phase 1)
  * @author      Denmas Totok (Architecture & Core Logic)
  * @refactor    Gemini AI Assistant (Code Optimization)
  * @since       2024-01-14
@@ -1246,14 +1246,8 @@ selectCustomer() {
     // Show info box
     $('#customer_info_box').removeClass('hidden');
     
-    // Rate Editable Logic
-    // Agent dan Bank bisa edit rate manual
-    if (['agent', 'bank', 'moneychanger'].includes(this.currentCustomer.type)) {
-        this.$rate.prop('readonly', false).removeClass('bg-gray');
-        this.$rate.attr('placeholder', 'Custom rate for ' + this.currentCustomer.type);
-    } else {
-        this.$rate.prop('readonly', true).addClass('bg-gray');
-    }
+// ✅ FIX: Apply rate lock policy via dedicated method
+this.applyRateLockPolicy();
     
     console.log('✅ Customer Selected:', this.currentCustomer);
 }
@@ -1273,8 +1267,11 @@ clearCustomer() {
     // Hide info box
     $('#customer_info_box').addClass('hidden');
     
-    // Reset rate to readonly
+    // ✅ FIX: Reset rate to locked state when customer cleared
     this.$rate.prop('readonly', true).addClass('bg-gray');
+    this.$rate.attr('placeholder', 'Select customer first');
+    
+    console.log('🔄 Customer cleared, rate locked');
 }
 
 // ============================================================================
@@ -1392,7 +1389,7 @@ async submitNewCustomer() {
 
 
   /* ---------------- CALCULATION LOGIC ---------------- */
-  selectItem() {
+selectItem() {
     const o = this.$item.find(':selected');
     $('#inp_denom').val(U.num(o.data('denom')));
     $('#base_rate_hidden').val(U.num(o.data('rate')));
@@ -1403,8 +1400,37 @@ async submitNewCustomer() {
     this.$riyal.val('');
     this.$idr.val('Rp 0');
 
+    // ✅ FIX: Re-apply rate lock based on customer type
+    this.applyRateLockPolicy();  // ← TAMBAH INI
     this.checkStockLock();
-  }
+}
+
+// ✅ NEW METHOD: Centralized Rate Lock Policy
+applyRateLockPolicy() {
+    if (!this.currentCustomer) {
+        // No customer selected → lock by default
+        this.$rate.prop('readonly', true).addClass('bg-gray');
+        this.$rate.attr('placeholder', 'Select customer first');
+        return;
+    }
+
+    // Check customer type
+    const privilegedTypes = ['agent', 'bank', 'moneychanger', 'member'];
+    
+    if (privilegedTypes.includes(this.currentCustomer.type)) {
+        // UNLOCK for privileged customers
+        this.$rate.prop('readonly', false).removeClass('bg-gray');
+        this.$rate.attr('placeholder', `Custom rate for ${this.currentCustomer.type}`);
+        console.log(`✅ Rate UNLOCKED for customer type: ${this.currentCustomer.type}`);
+    } else {
+        // LOCK for 'umum' and others
+        this.$rate.prop('readonly', true).addClass('bg-gray');
+        this.$rate.attr('placeholder', 'Fixed rate (umum)');
+        console.log(`🔒 Rate LOCKED for customer type: ${this.currentCustomer.type}`);
+    }
+}
+
+
 
   syncFromQty() {
     const d = U.num($('#inp_denom').val());
@@ -2104,7 +2130,6 @@ renderStockTable() {
         if ($opt.length) {
             // Update atribut data-stock dan label teksnya
             $opt.attr('data-stock', s.qty_end);
-            $opt.text(`${s.sku} - ${s.name} (Stok: ${U.fmt(s.qty_end)})`);
         }
     });
 
