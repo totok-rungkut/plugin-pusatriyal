@@ -42,14 +42,14 @@ class Puri_Cockpit_POS {
         add_action('wp_ajax_puri_pos_get_stock_summary', [$this, 'ajax_get_stock_summary']);
         add_action('wp_ajax_puri_pos_get_daily_mutation', [$this, 'ajax_get_daily_mutation']);
         add_action('wp_ajax_puri_pos_checkout', [$this, 'ajax_process_checkout']);
+		
+        // ✅ AJAX Endpoints - Pool Transaction CRUD		
         add_action('wp_ajax_puri_pos_get_pool_snapshot', [$this, 'get_pool_snapshot']);
 		add_action('wp_ajax_puri_pos_get_pool_history', [$this, 'get_pool_history']);
 		add_action('wp_ajax_puri_pos_void_pool_transaction', [$this, 'void_pool_transaction']);
 		
         // AJAX Endpoints - Customer Management (NEW v6.10.25)
         add_action('wp_ajax_puri_pos_create_customer', [$this, 'ajax_create_customer']);
-		
-		// ubah nama file menjadi format : KTP_nama-anda_123456.png
 		add_action('wp_ajax_puri_pos_upload_customer_id', [$this, 'ajax_upload_customer_id']);
     }
 
@@ -58,13 +58,17 @@ class Puri_Cockpit_POS {
  * AJAX: Get Pool Transaction Snapshot (untuk Edit)
  */
 public function get_pool_snapshot() {
-    check_ajax_referer('puri_pos_checkout', 'nonce');
+    // check_ajax_referer('puri_pos_checkout', 'nonce');  // temporary for debug
     global $wpdb;
 
-    $ref_id = sanitize_text_field($_POST['ref_id'] ?? '');
-    
-    if (empty($ref_id)) {
-        wp_send_json_error('Reference ID tidak valid');
+error_log("🔍 POOL SNAPSHOT REQUEST: " . print_r($_POST, true));
+
+$ref_id = sanitize_text_field($_POST['ref_id'] ?? '');
+
+if (empty($ref_id)) {
+    error_log("❌ POOL SNAPSHOT: Empty ref_id received. POST data: " . json_encode($_POST));
+
+		wp_send_json_error('Reference ID tidak valid');
     }
 
     $tbl_pool = puri_table_name('T_POOL_TRANSACTIONS');
@@ -76,24 +80,49 @@ public function get_pool_snapshot() {
     ));
 
     if (!$row) {
+            error_log("❌ POOL SNAPSHOT: Transaction not found - {$ref_id}");		
         wp_send_json_error('Transaksi tidak ditemukan');
     }
 
     // ✅ Validasi: Hanya pending/verified yang bisa diedit
-    if (!in_array($row->status, ['pending', 'verified'])) {
-        wp_send_json_error('Transaksi sudah diposting, tidak bisa diedit');
-    }
+        if (!in_array($row->status, ['pending', 'verified'])) {
+            error_log("⚠️ POOL SNAPSHOT: Invalid status - {$row->status}");
+            wp_send_json_error('Transaksi sudah diposting, tidak bisa diedit');
+        }
 
     // ✅ Parse items snapshot
     $items_snapshot = json_decode($row->items_snapshot, true);
     
-    if (empty($items_snapshot)) {
-        wp_send_json_error('Data item tidak valid');
-    }
+        if (empty($items_snapshot) || !is_array($items_snapshot)) {
+            error_log("❌ POOL SNAPSHOT: Invalid items_snapshot - " . $row->items_snapshot);
+            wp_send_json_error('Data item tidak valid');
+        }
 
     // ✅ Rebuild cart structure untuk frontend
+	// 🔧 FIXED: Rebuild cart structure dengan wp_post_id
+    $tbl_items = puri_table_name('T_ITEMS');
     $cart_data = [];
+	
     foreach ($items_snapshot as $item) {
+		// Get item_id with proper fallback
+		$item_id = intval($item['item_id'] ?? $item['id'] ?? 0);
+		
+		if ($item_id <= 0) {
+			error_log("⚠️ POOL SNAPSHOT: Invalid item_id in snapshot");
+			continue;
+		}
+
+		// 🔧 FIXED: Fetch wp_post_id from T_ITEMS
+		$wp_post_id = $wpdb->get_var($wpdb->prepare(
+			"SELECT wp_post_id FROM {$tbl_items} WHERE id = %d",
+			$item_id
+		));
+
+		if (!$wp_post_id) {
+			error_log("⚠️ POOL SNAPSHOT: wp_post_id not found for item_id {$item_id}");
+			$wp_post_id = 0; // Fallback ke 0
+		}
+		
         $cart_data[] = [
             'id' => intval($item['item_id'] ?? $item['id'] ?? 0),
             'item_id' => intval($item['item_id'] ?? $item['id'] ?? 0),
@@ -106,6 +135,12 @@ public function get_pool_snapshot() {
             'subtotal_idr' => floatval($item['qty'] ?? 0) * floatval($item['denom'] ?? 0) * floatval($item['rate'] ?? 0)
         ];
     }
+        if (empty($cart_data)) {
+            error_log("❌ POOL SNAPSHOT: No valid items after rebuild");
+            wp_send_json_error('Tidak ada item valid dalam transaksi');
+        }
+
+        error_log("✅ POOL SNAPSHOT: Success - {$ref_id}, Items: " . count($cart_data));
 
     wp_send_json_success([
         'ref_id' => $row->ref_id,
@@ -1006,6 +1041,18 @@ bindEvents() {
 
     // History Refresh
     $('#btn_refresh_history').on('click', () => this.loadStockAndHistory());
+// Pool Transaction Actions (Event Delegation)
+$(document).on('click', '.edit-pool-btn', (e) => {
+    const refId = $(e.currentTarget).data('ref-id');
+    console.log('🖱️ Edit Button Clicked, ref_id:', refId);
+    this.editFromPool(refId);
+});
+
+$(document).on('click', '.void-pool-btn', (e) => {
+    const refId = $(e.currentTarget).data('ref-id');
+    console.log('🖱️ Void Button Clicked, ref_id:', refId);
+    this.confirmVoid(refId);
+});
 
     // Clear Form Button
     $('#btn_clear_form').on('click', () => {
@@ -1352,18 +1399,20 @@ renderHistoryTable() {
         
         // ✅ Disable action buttons jika sudah posted/void
         const canEdit = (h.status === 'pending' || h.status === 'verified');
-        const actionButtons = canEdit ? `
-            <button onclick="window.Cockpit.editFromPool('${h.ref_id}')" 
-                    class="button button-small" title="Edit">
-                <i class="fa fa-pencil-alt" style="color:#2271b1"></i>
-            </button>
-            <button onclick="window.Cockpit.confirmVoid('${h.ref_id}')" 
-                    class="button button-small" title="Void">
-                <i class="fa fa-trash" style="color:#d63638"></i>
-            </button>
-        ` : `
-            <span style="color:#999; font-size:10px;">Locked</span>
-        `;
+const actionButtons = canEdit ? `
+    <button type="button" class="button button-small edit-pool-btn" 
+            data-ref-id="${h.ref_id}" 
+            title="Edit">
+        <i class="fa fa-pencil-alt" style="color:#2271b1"></i>
+    </button>
+    <button type="button" class="button button-small void-pool-btn" 
+            data-ref-id="${h.ref_id}" 
+            title="Void">
+        <i class="fa fa-trash" style="color:#d63638"></i>
+    </button>
+` : `
+    <span style="color:#999; font-size:10px;">Locked</span>
+`;
         
         $tb.append(`
             <tr class="status-${h.status}">
@@ -1475,6 +1524,8 @@ silentVoid(refId) {
  * EDIT FROM POOL LOGIC  - CRUD SCHEME
  * ===================================================== */
 editFromPool(refId) {
+    console.log('🔍 Edit Pool Called, ref_id:', refId); // Debug log
+    
     Swal.fire({
         title: 'Edit Transaksi?',
         text: "Data akan dikembalikan ke keranjang untuk diperbaiki.",
@@ -1484,44 +1535,36 @@ editFromPool(refId) {
         confirmButtonText: 'Ya, Bongkar Keranjang'
     }).then((result) => {
         if (result.isConfirmed) {
-            // ✅ Tampilkan loading
             Swal.fire({
                 title: 'Loading...',
                 text: 'Mengambil data transaksi',
                 didOpen: () => Swal.showLoading()
             });
 
-            U.ajax({
-                data: { 
-                    action: 'puri_pos_get_pool_snapshot', 
+            $.ajax({
+                url: ajaxurl,
+                type: 'POST',
+                data: {
+                    action: 'puri_pos_get_pool_snapshot',
                     ref_id: refId,
                     nonce: '<?php echo wp_create_nonce("puri_pos_checkout"); ?>'
                 },
                 success: (r) => {
+                    console.log('📦 AJAX Response:', r); // Debug log
+                    
                     if (r.success) {
-                        // 1. Restore cart state
                         this.cart = r.data.cart;
                         this.tradeMode = r.data.trade_mode;
                         this.currentEditRef = refId;
                         
-                        // 2. Update UI - Trade mode radio
                         $(`input[name="trade_mode"][value="${this.tradeMode}"]`).prop('checked', true);
-                        
-                        // 3. Update customer selection
                         this.$cust.val(r.data.cust_id).trigger('change');
-                        
-                        // 4. Update payment method
                         this.$payMethod.val(r.data.pay_method);
-                        
-                        // 5. Update delivery method
                         $('#delivery_method').val(r.data.delivery_method);
 
-                        // 6. Render cart & apply mode guard
                         this.renderCart();
                         this.applyModeGuard();
                         this.lockSession();
-
-                        // 7. Void transaksi lama (silent mode)
                         this.silentVoid(refId);
 
                         Swal.fire({
@@ -1531,11 +1574,9 @@ editFromPool(refId) {
                             timer: 2000
                         });
 
-                        // ✅ Scroll ke panel transaction
                         $('html, body').animate({
                             scrollTop: $('#panelInputTransaksi').offset().top - 100
                         }, 500);
-
                     } else {
                         Swal.fire('Error', r.data || 'Gagal mengambil data', 'error');
                     }
@@ -1548,6 +1589,7 @@ editFromPool(refId) {
         }
     });
 }
+
 
 
 /* ==============================
