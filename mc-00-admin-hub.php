@@ -280,15 +280,15 @@ add_action('admin_notices', function() {
 });
 
 // Jebakan untuk melacak siapa menulis meta
+
 add_action('updated_post_meta', function($meta_id, $object_id, $meta_key, $meta_value){
-    error_log("UPDATED META: post={$object_id}, key={$meta_key}, value={$meta_value}");
-    // tampilkan di browser console
-    echo "<script>console.log('UPDATED META', {
-        post_id: '{$object_id}',
-        key: '{$meta_key}',
-        value: '{$meta_value}'
-    });</script>";
+    // Tetap simpan di debug log server untuk pelacakan
+    if (!in_array($meta_key, ['_edit_lock', '_edit_last'])) {
+        error_log("PURI_DEBUG: Meta Updated [ID: {$object_id}] Key: {$meta_key}");
+    }
 }, 10, 4);
+
+
 
 add_action('added_post_meta', function($meta_id, $object_id, $meta_key, $meta_value){
     error_log("ADDED META: post={$object_id}, key={$meta_key}, value={$meta_value}");

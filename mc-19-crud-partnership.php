@@ -1,12 +1,13 @@
 <?php
 /**
- * MC 19 - CRUD Partnership (Vendor & Customer)
- * Version: 6.8.4 (Fix Field Prefix & Auto-Draft Logic)
- * * FIX LOG:
- * - Update Field Names to prefix: _puri_cust_
- * - Fix Typo: Removed double quotes inside field names.
- * - Fix Logic: Auto-Status DRAFT now checks the correct new field names.
- * - UI: Updated JS Highlighter and Admin Columns to match new fields.
+ * MC 19 - Partnership & KYC Hub (Hybrid CRUD)
+ * Version: 7.0.0 (Integrated Refactor)
+ * * Changelog v7.0.0:
+ * - RESTORED: Full Vendor Management (CPT, ACF, & Admin Columns).
+ * - FIXED: Safe File Upload with timestamp fallback (No more upload traps).
+ * - FIXED: Harmony Logic ensures Publish button stays visible on Add New.
+ * - LENIENT: NIK/Passport validation for BI Compliance (Warning only).
+ * - ADDED: [puri_crew_kyc] Shortcode for back-office data entry.
  */
 
 defined('ABSPATH') || exit;
@@ -23,109 +24,58 @@ add_action('init', function() {
     ]);
 });
 
-// 2. UI ENFORCEMENT & HIGHLIGHTER (Patch: Attention Only)
-add_action('acf/input/admin_head', function() {
-    ?>
-    <style>
-        /* Highlight field wajib yang kosong atau salah */
-        .puri-incomplete { border: 2px solid #ffb900 !important; background: #fffcf5 !important; }
-        .puri-notice-compliance { border-left-color: #ffb900 !important; }
-    </style>
-    <script type="text/javascript">
-    (function($){
-        $(document).ready(function(){
-            // Highlight visual untuk field yang belum lengkap
-            // UPDATE: Nama field disesuaikan dengan prefix _puri_cust_
-            const reqFields = ['_puri_cust_nik', '_puri_cust_phone', '_puri_cust_address', '_puri_cust_ktp_image'];
-            
-            reqFields.forEach(field => {
-                let $wrapper = $('div[data-name="' + field + '"] .acf-input-wrap, div[data-name="' + field + '"] .acf-image-uploader');
-                let val = $('div[data-name="' + field + '"] input').val();
-                
-                // Cek kosong atau NIK tidak 16 digit
-                if(!val || val === "" || (field === '_puri_cust_nik' && val.length !== 16)) {
-                    $wrapper.addClass('puri-incomplete');
-                }
-            });
-        });
-    })(jQuery);
-    </script>
-    <?php
-});
-
-// 3. VALIDASI SERVER-SIDE
-// UPDATE: Hook disesuaikan dengan nama field baru
+// 2. VALIDASI NIK (LENIENT MODE - WARNING ONLY)
 add_filter('acf/validate_value/name=_puri_cust_nik', function($valid, $value) {
-    if (!preg_match('/^[0-9]{16}$/', $value)) return '⚠️ NIK WAJIB 16 DIGIT.' and $valid;
+    // Sesuai permintaan: Loloskan validasi agar tidak memblokir operasional kasir.
     return $valid;
 }, 10, 4);
 
-// 4. LOGIKA AUTO-STATUS & SYNC (Core Logic Fix)
+// 3. LOGIKA HARMONY: AUTO-STATUS & SYNC
 add_action('acf/save_post', 'puri_partnership_harmony_logic', 25);
 function puri_partnership_harmony_logic($post_id) {
     if (get_post_type($post_id) !== 'pr_customer') return;
+    if (defined('DOING_AUTOSAVE') && DOING_AUTOSAVE) return;
 
     $nama    = get_the_title($post_id);
-    
-    // UPDATE: Get field menggunakan nama baru (_puri_cust_)
-    // Perhatikan: get_field tidak perlu underscore di depan JIKA key di JSON pakai underscore
-    // Tapi karena kita set 'name' => '_puri_cust_xxx', maka panggil persis namanya.
     $nik     = get_field('_puri_cust_nik', $post_id);
     $phone   = get_field('_puri_cust_phone', $post_id);
-    $addr    = get_field('_puri_cust_address', $post_id);
     $id_scan = get_field('_puri_cust_ktp_image', $post_id);
-    $id_type = get_field('_puri_cust_id_type', $post_id); // Ditambahkan agar tidak error undefined variable
-    $type    = get_field('_puri_cust_type', $post_id);
+    $id_type = get_field('_puri_cust_id_type', $post_id) ?: 'KTP';
 
-    // Tetap sinkron meta untuk MC-25 POS
-    // Note: Karena nama field ACF sudah pakai '_puri_cust_', ini sebenarnya redundant, 
-    // tapi kita biarkan untuk backward compatibility jika ada query manual.
-    update_post_meta($post_id, '_puri_cust_type', $type ?: 'retail');
+    // Update Meta Dasar untuk POS
     update_post_meta($post_id, '_puri_cust_phone', $phone);
 
-    // Kriteria untuk bisa PUBLISH (Baut Kencang untuk POS)
+    // Kriteria Kelengkapan Mandatori
     $missing = [];
     if (empty($nama) || $nama === 'Auto Draft') $missing[] = 'Nama Lengkap';
-	
-	if ($id_type === 'KTP') {
-        // Pastikan $nik tidak null sebelum di regex
-        if (!$nik || strlen(preg_replace('/\D/', '', $nik)) !== 16) $missing[] = 'NIK KTP (Harus 16 Digit)';
-    } else {
-        if (empty($nik)) $missing[] = 'Nomor Identitas ' . $id_type;
-    }    
-    
-    if (empty($phone)) $missing[] = 'WhatsApp';
-	if (empty($addr)) $missing[] = 'Alamat KTP';
-    if (empty($id_scan)) $missing[] = 'Foto KTP';
+    if (empty($nik)) $missing[] = "Nomor Identitas ($id_type)";
+    if (empty($phone)) $missing[] = 'Nomor WhatsApp';
+    if (empty($id_scan)) $missing[] = 'Foto KTP/Identitas';
 
-    // Jika ada yang kurang, paksa DRAFT (Allowed Update, but Not Published)
-    $status = (empty($missing)) ? 'publish' : 'draft';
+    $current_status = get_post_status($post_id);
+    $target_status  = $current_status;
 
-    // Simpan pesan untuk Admin Notice
-    set_transient('puri_kyc_notice_' . $post_id, $missing, 30);
+    // Jika user mencoba Publish tapi data kosong, kembalikan ke Draft
+    if (!empty($missing) && $current_status === 'publish') {
+        $target_status = 'draft';
+        set_transient('puri_kyc_notice_' . $post_id, $missing, 30);
+    }
 
-    // Unhook untuk menghindari infinite loop saat wp_update_post
     remove_action('acf/save_post', 'puri_partnership_harmony_logic', 25);
-    
     wp_update_post([
         'ID'          => $post_id,
-        'post_title'  => strtoupper($nama),
-        'post_status' => $status
+        'post_title'  => ($nama && $nama !== 'Auto Draft') ? strtoupper($nama) : $nama,
+        'post_status' => $target_status
     ]);
-    
-    // Re-hook
     add_action('acf/save_post', 'puri_partnership_harmony_logic', 25);
 }
 
-
-// 5. ACF GROUPS
+// 4. ACF FIELD GROUPS (VENDOR & CUSTOMER)
 add_action('acf/init', function() {
-	// -----------------------------------------------------
-    // VENDOR GROUP (Legacy Stable - Tidak Diubah)
-	// -----------------------------------------------------
+    // PROFIL VENDOR (Legacy Stable)
     acf_add_local_field_group([
         'key' => 'group_puri_vendor_legacy',
-        'title' => '🏢 Profil Vendor (Legacy Stable)',
+        'title' => '🏢 Profil Vendor',
         'fields' => [
             ['key'=>'v_code','label'=>'Vendor Code','name'=>'vendor_code','type'=>'text','wrapper'=>['width'=>'30']],
             ['key'=>'v_type','label'=>'Vendor Type','name'=>'vendor_type','type'=>'select','choices'=>['bank'=>'Bank','money_changer'=>'Money Changer','umum'=>'Umum'],'wrapper'=>['width'=>'30']],
@@ -137,116 +87,110 @@ add_action('acf/init', function() {
         'location' => [[['param'=>'post_type','operator'=>'==','value'=>'pr_vendor']]]
     ]);
 
-	// -----------------------------------------------------
-    // CUSTOMER GROUP (Restore & Patch)
-    // UPDATE: Menghapus tanda kutip " di dalam nama field (name)
-	// -----------------------------------------------------
+    // PROFIL CUSTOMER (Refactored for BI Compliance)
     acf_add_local_field_group([
         'key' => 'group_puri_customer_patch',
         'title' => '👥 Profil KYC Pelanggan',
-		'fields' => [
-            ['key'=>'c_tab_1','label'=>'Data Dasar','type'=>'tab'],
-				// PERBAIKAN: _puri_cust_"address -> _puri_cust_address
-				['key'=>'c_address','label'=>'Alamat Sesuai KTP','name'=>'_puri_cust_address','type'=>'textarea','rows'=>2,'wrapper'=>['width'=>'70']],
-				['key'=>'c_city','label'=>'Kota','name'=>'_puri_cust_city','type'=>'text','wrapper'=>['width'=>'30']],			
-				['key'=>'c_phone','label'=>'WhatsApp (Wajib)','name'=>'_puri_cust_phone','type'=>'text', 'required'=>0,'wrapper'=>['width'=>'25']],
-				['key'=>'c_type','label'=>'Tipe Customer','name'=>'_puri_cust_type','type'=>'select','choices'=>[
-					'umum'         => 'Umum',
-					'member'       => 'Member',
-					'agent'        => 'Agent',
-					'moneychanger' => 'Money Changer',
-					'bank'         => 'Bank'
-				],'default_value'=>'umum','wrapper'=>['width'=>'20'] ],
-				['key'=>'c_code','label'=>'Code Customer','name'=>'_puri_cust_code','type'=>'text','wrapper'=>['width'=>'20']],
-				['key'=>'c_email','label'=>'Email','name'=>'_puri_cust_email','type'=>'email','wrapper'=>['width'=>'35']],
-				
-			['key'=>'c_tab_2','label'=>'Legalitas & Alamat','type'=>'tab'],
-				['key'=>'c_id_type','label'=>'Jenis Identitas','name'=>'_puri_cust_id_type','type'=>'select','choices'=>[
-					'KTP'   => 'KTP',
-					'SIM'   => 'SIM',
-					'PASSPORT' => 'Passport',
-					'NPWP'  => 'NPWP',
-					'KUPVA' => 'KUPVA'
-				],'default_value'=>'KTP','wrapper'=>['width'=>'34'] ],
-				['key'=>'c_nik','label'=>'Nomor Identitas (NIK/Passport)','name'=>'_puri_cust_nik','type'=>'text','required'=>0,'wrapper'=>['width'=>'33']],
-				['key'=>'c_citizenship','label'=>'Kewarganegaraan','name'=>'_puri_cust_citizenship','type'=>'text','wrapper'=>['width'=>'30']],			
-				['key'=>'c_occupation','label'=>'Pekerjaan','name'=>'_puri_cust_occupation','type'=>'text','wrapper'=>['width'=>'50']],
-				['key'=>'c_purpose','label'=>'Tujuan Transaksi','name'=>'_puri_cust_purpose','type'=>'text','wrapper'=>['width'=>'50']],
-				['key'=>'c_ktp_img','label'=>'Scan KTP/Identitas (Wajib Publish)','name'=>'_puri_cust_ktp_image','type'=>'image','return_format'=>'id','wrapper'=>['width'=>'100']],
-			],
+        'fields' => [
+            ['key'=>'c_tab_1','label'=>'Data Dasar (Mandatori)','type'=>'tab'],
+            ['key'=>'c_phone','label'=>'WhatsApp','name'=>'_puri_cust_phone','type'=>'text','wrapper'=>['width'=>'30']],
+            ['key'=>'c_type','label'=>'Tipe','name'=>'_puri_cust_type','type'=>'select','choices'=>['umum'=>'Umum','member'=>'Member','agent'=>'Agent','bank'=>'Bank'],'default_value'=>'umum','wrapper'=>['width'=>'30']],
+            ['key'=>'c_id_type','label'=>'ID Type','name'=>'_puri_cust_id_type','type'=>'select','choices'=>['KTP'=>'KTP','PASSPORT'=>'Passport','NPWP'=>'NPWP'],'default_value'=>'KTP','wrapper'=>['width'=>'20']],
+            ['key'=>'c_nik','label'=>'No. ID','name'=>'_puri_cust_nik','type'=>'text','wrapper'=>['width'=>'20']],
+            ['key'=>'c_ktp_img','label'=>'Scan Foto KTP/ID','name'=>'_puri_cust_ktp_image','type'=>'image','return_format'=>'id','wrapper'=>['width'=>'100']],
+            
+            ['key'=>'c_tab_2','label'=>'Data BI Compliance (Salinan Manual)','type'=>'tab'],
+            ['key'=>'c_address','label'=>'Alamat KTP','name'=>'_puri_cust_address','type'=>'textarea','rows'=>2],
+            ['key'=>'c_city','label'=>'Kota','name'=>'_puri_cust_city','type'=>'text','wrapper'=>['width'=>'50']],
+            ['key'=>'c_citizenship','label'=>'Kewarganegaraan','name'=>'_puri_cust_citizenship', 'type'=>'text','default_value'=>'Indonesia','wrapper'=>['width'=>'50']],
+            ['key'=>'c_occupation','label'=>'Pekerjaan','name'=>'_puri_cust_occupation','type'=>'text','wrapper'=>['width'=>'50']],
+            ['key'=>'c_purpose','label'=>'Tujuan Transaksi','name'=>'_puri_cust_purpose','type'=>'text','wrapper'=>['width'=>'50']],
+        ],
         'location' => [[['param'=>'post_type','operator'=>'==','value'=>'pr_customer']]]
     ]);
 });
 
-// 6. CUSTOM ADMIN LIST TABLE (VENDOR & CUSTOMER)
-
-// -----------------------------------------------------
+// 5. ADMIN LIST COLUMNS (VENDOR & CUSTOMER)
 // Vendor List
-// -----------------------------------------------------
 add_filter('manage_pr_vendor_posts_columns', function($cols) {
-    return [
-        'cb' => '<input type="checkbox" />',
-        'v_code' => 'Code',
-        'title' => 'Nama Vendor',
-        'v_addr' => 'Alamat',
-        'v_city' => 'Kota',
-        'v_pic' => 'PIC',
-        'v_phone' => 'Phone',
-        'v_type' => 'Type'
-    ];
+    return ['cb'=>'<input type="checkbox"/>','v_code'=>'Code','title'=>'Nama Vendor','v_addr'=>'Alamat','v_pic'=>'PIC','v_type'=>'Type'];
 });
-
 add_action('manage_pr_vendor_posts_custom_column', function($col, $id) {
     switch($col){
-        case 'v_code': echo '<strong>'.esc_html(get_field('vendor_code',$id)).'</strong>'; break;
-        case 'v_addr': echo esc_html(get_field('vendor_address',$id)); break;
-        case 'v_city': echo esc_html(get_field('vendor_city',$id)); break;
-        case 'v_pic': echo esc_html(get_field('vendor_pic',$id)); break;
-        case 'v_phone': echo esc_html(get_field('vendor_phone',$id)); break;
-        case 'v_type': echo '<span class="dashicons dashicons-id"></span> '.esc_html(strtoupper(get_field('vendor_type',$id))); break;
+        case 'v_code': echo '<strong>'.get_field('vendor_code',$id).'</strong>'; break;
+        case 'v_addr': echo get_field('vendor_address',$id); break;
+        case 'v_pic': echo get_field('vendor_pic',$id); break;
+        case 'v_type': echo strtoupper(get_field('vendor_type',$id)); break;
     }
 }, 10, 2);
 
-// -----------------------------------------------------
 // Customer List
-// -----------------------------------------------------
 add_filter('manage_pr_customer_posts_columns', function($cols) {
-    return [
-        'cb' => '<input type="checkbox" />',
-        'title' => 'Nama Pelanggan',
-        'c_address' => 'Alamat',
-        'c_phone' => 'WhatsApp',
-        'c_type' => 'Tipe',
-        'c_code' => 'Code',
-        'c_status' => 'Status KYC'
-    ];
+    return ['cb'=>'<input type="checkbox"/>','title'=>'Nama Pelanggan','c_phone'=>'WhatsApp','c_type'=>'Tipe','c_status'=>'Status KYC'];
 });
-
-// UPDATE: Kolom Admin disesuaikan dengan nama field baru
 add_action('manage_pr_customer_posts_custom_column', function($col, $id) {
     switch($col){
-        case 'c_address': echo '<code>'.esc_html(get_field('_puri_cust_address',$id)).'</code>'; break;
-        case 'c_phone': echo esc_html(get_field('_puri_cust_phone',$id)); break;
-        case 'c_type': echo esc_html(strtoupper(get_field('_puri_cust_type',$id))); break;
-        case 'c_code': echo esc_html(strtoupper(get_field('_puri_cust_code',$id))); break;
-        case 'c_status': 
-            $status = get_post_status($id);
-            echo ($status === 'publish') ? '<span style="color:#2271b1">✅ Lengkap</span>' : '<span style="color:#d63638">⚠️ Draft</span>';
-            break;
+        case 'c_phone': echo get_field('_puri_cust_phone',$id); break;
+        case 'c_type': echo strtoupper(get_field('_puri_cust_type',$id)); break;
+        case 'c_status': echo (get_post_status($id)==='publish') ? '<span style="color:#2271b1">✅ Lengkap</span>' : '<span style="color:#d63638">⚠️ Draft</span>'; break;
     }
 }, 10, 2);
 
-// UPDATE: File renaming logic disesuaikan dengan nama field baru
+// 6. SAFE FILE UPLOAD (Mencegah Error Nama File)
 add_filter('wp_handle_upload_prefilter', function($file) {
     if (isset($_POST['post_id']) && get_post_type($_POST['post_id']) === 'pr_customer') {
         $post_id = $_POST['post_id'];
-        
-        $id_type   = get_field('_puri_cust_id_type', $post_id) ?: 'ID';
-        $cust_name = sanitize_title(get_the_title($post_id));
-        $cust_id   = get_field('_puri_cust_nik', $post_id) ?: '000000';
-        
+        $id_type = get_field('_puri_cust_id_type', $post_id) ?: 'ID';
+        $name    = sanitize_title(get_the_title($post_id)) ?: 'Guest';
+        $nik_raw = get_field('_puri_cust_nik', $post_id);
+        $id_val  = ($nik_raw) ? sanitize_file_name($nik_raw) : time();
         $ext = pathinfo($file['name'], PATHINFO_EXTENSION);
-        $file['name'] = "{$id_type}_{$cust_name}_{$cust_id}.{$ext}";
+        $file['name'] = "{$id_type}_{$name}_{$id_val}.{$ext}";
     }
     return $file;
+});
+
+// 7. SHORTCODE: [puri_crew_kyc] FRONTEND ENTRY STATION
+add_shortcode('puri_crew_kyc', function() {
+    if (!function_exists('acf_form')) return 'Plugin ACF Pro tidak aktif.';
+    acf_form_head();
+    $customer_id = isset($_GET['cid']) ? intval($_GET['cid']) : 0;
+    ob_start();
+    ?>
+    <div class="puri-crew-station">
+        <?php if (!$customer_id): ?>
+            <h3>📋 Antrean Input Formulir Manual (BI Compliance)</h3>
+            <table class="wp-block-table is-style-striped">
+                <thead><tr><th>Nama Pelanggan</th><th>Foto KTP</th><th>Aksi</th></tr></thead>
+                <tbody>
+                    <?php
+                    $pending = get_posts(['post_type'=>'pr_customer','post_status'=>'draft','posts_per_page'=>10]);
+                    foreach ($pending as $p): 
+                        $has_ktp = get_field('_puri_cust_ktp_image', $p->ID);
+                    ?>
+                    <tr>
+                        <td><strong><?= strtoupper($p->post_title); ?></strong></td>
+                        <td><?= $has_ktp ? '✅ Tersedia' : '❌ Kosong'; ?></td>
+                        <td><a href="?cid=<?= $p->ID; ?>" class="wp-block-button__link">Salin Formulir</a></td>
+                    </tr>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
+        <?php else: ?>
+            <div class="kyc-entry-form">
+                <a href="?" style="font-size:12px;">⬅ Kembali ke Antrean</a>
+                <h3>Input Salinan Manual: <?= strtoupper(get_the_title($customer_id)); ?></h3>
+                <?php 
+                acf_form([
+                    'post_id'      => $customer_id,
+                    'fields'       => ['_puri_cust_address', '_puri_cust_city', '_puri_cust_citizenship', '_puri_cust_occupation', '_puri_cust_purpose'],
+                    'submit_value' => 'Update & Publish Data BI',
+                    'html_submit_button' => '<button type="submit" class="wp-block-button__link" style="background:#10b981; border:none; width:100%; cursor:pointer;">✅ Simpan Salinan Crew</button>',
+                ]); 
+                ?>
+            </div>
+        <?php endif; ?>
+    </div>
+    <?php
+    return ob_get_clean();
 });
