@@ -1,12 +1,12 @@
 <?php
 /**
  * ============================================================================
- * MC-05 - COCKPIT EXTENDED POINT OF SALE SYSTEM
+ * MC-05 - COCKPIT EXTENDED POINT OF SALE SYSTEM  --> disaster blank history
  * ============================================================================
  * 
  * @package     Puri_Money_Changer
  * @subpackage  Cockpit_POS
- * @version     7.8.38 (UX Restructured - Pool Transaction Phase 1)
+ * @version     7.8.40 (UX Restructured - Pool Transaction Phase 1)
  * @author      Denmas Totok (Architecture & Core Logic)
  * @refactor    Gemini AI Assistant (Code Optimization)
  * @since       2024-01-14
@@ -156,68 +156,118 @@ if (empty($ref_id)) {
 /**
  * AJAX: Void Pool Transaction (Soft Delete + Stock Reversal)
  */
+/**
+ * AJAX: Void Pool Transaction (Soft Delete + Stock Reversal)
+ * Version: 7.3.40 (FIXED)
+ */
 public function void_pool_transaction() {
     check_ajax_referer('puri_pos_checkout', 'nonce');
     global $wpdb;
 
+    // ✅ PATCH 1: Get ref_id with proper validation
     $ref_id = sanitize_text_field($_POST['ref_id'] ?? '');
     
+    // ✅ PATCH 2: Check silent mode BEFORE validation
+    $is_silent = isset($_POST['silent_mode']) && $_POST['silent_mode'] === '1';
+
+    // ✅ PATCH 3: CRITICAL FIX - Only return error if ref_id is ACTUALLY empty
     if (empty($ref_id)) {
+        error_log("❌ VOID ERROR: Empty ref_id received. POST data: " . json_encode($_POST));
         wp_send_json_error('Reference ID tidak valid');
+        return; // ✅ Add explicit return to prevent further execution
+    }
+
+    if ($is_silent) {
+        error_log("🔇 SILENT VOID MODE: {$ref_id}");
+    } else {
+        error_log("🗑️ NORMAL VOID MODE: {$ref_id}");
     }
 
     $tbl_pool = puri_table_name('T_POOL_TRANSACTIONS');
     $tbl_pool_stock = puri_table_name('T_POOL_STOCK');
     $tbl_stock = puri_table_name('T_STOCK');
 
-    // ✅ Cek apakah transaksi ada
+    // ✅ PATCH 4: Check if transaction exists
     $transaction = $wpdb->get_row($wpdb->prepare(
         "SELECT * FROM {$tbl_pool} WHERE ref_id = %s",
         $ref_id
     ));
 
     if (!$transaction) {
+        error_log("❌ VOID ERROR: Transaction not found - {$ref_id}");
         wp_send_json_error('Transaksi tidak ditemukan');
+        return;
     }
 
-    // ✅ Validasi: Hanya pending/verified yang bisa di-void
+    // ✅ PATCH 5: Validate status - only pending/verified can be voided
     if (!in_array($transaction->status, ['pending', 'verified'])) {
-        wp_send_json_error('Transaksi sudah diposting, tidak bisa dihapus');
+        error_log("⚠️ VOID ERROR: Invalid status - {$transaction->status} for {$ref_id}");
+        wp_send_json_error("Transaksi sudah {$transaction->status}, tidak bisa dihapus");
+        return;
     }
 
     // ✅ START TRANSACTION
     $wpdb->query('START TRANSACTION');
 
     try {
-        // 1. Update status menjadi 'void'
-        $wpdb->update(
+        error_log("🗑️ VOIDING TRANSACTION: {$ref_id} | Status was: {$transaction->status}");
+        
+        // ====================================================================
+        // STEP 1: UPDATE STATUS TO 'VOID'
+        // ====================================================================
+        $update_result = $wpdb->update(
             $tbl_pool,
-            ['status' => 'void', 'notes' => 'Voided by user at ' . current_time('mysql')],
+            [
+                'status' => 'void', 
+                'notes' => 'Voided by user ' . get_current_user_id() . ' at ' . current_time('mysql')
+            ],
             ['ref_id' => $ref_id]
         );
 
-        // 2. KEMBALIKAN STOK FISIK (Reverse movements)
+        if ($update_result === false) {
+            throw new Exception("Failed to update transaction status: " . $wpdb->last_error);
+        }
+
+        error_log("✅ Step 1: Status updated to VOID");
+
+        // ====================================================================
+        // STEP 2: REVERSE PHYSICAL STOCK
+        // ====================================================================
         $pool_items = $wpdb->get_results($wpdb->prepare(
             "SELECT * FROM {$tbl_pool_stock} WHERE ref_id = %s",
             $ref_id
         ));
 
+        if (empty($pool_items)) {
+            error_log("⚠️ WARNING: No stock movements found for {$ref_id}");
+        }
+
+        $reversed_count = 0;
         foreach ($pool_items as $item) {
             $item_id = intval($item->item_id);
             $location_id = $item->location_id;
             $qty_change = floatval($item->qty_change);
 
-            // ✅ REVERSE: Jika dulu minus (sell), sekarang plus (kembalikan stok)
+            if ($qty_change == 0) {
+                continue; // Skip items with zero movement
+            }
+
+            // ✅ REVERSE LOGIC: If qty_change was -5 (sell), now add +5 (return stock)
             $reverse_qty = -1 * $qty_change;
 
-            // Update T_STOCK
+            error_log("🔄 Reversing: Item {$item_id} @ {$location_id}: {$qty_change} → {$reverse_qty}");
+
+            // ================================================================
+            // UPDATE T_STOCK
+            // ================================================================
             $stock_exists = $wpdb->get_var($wpdb->prepare(
                 "SELECT id FROM {$tbl_stock} WHERE item_id = %d AND location_id = %s",
                 $item_id, $location_id
             ));
 
             if ($stock_exists) {
-                $wpdb->query($wpdb->prepare(
+                // Update existing record
+                $stock_update = $wpdb->query($wpdb->prepare(
                     "UPDATE {$tbl_stock} 
                      SET balance = balance + %f, 
                          updated_at = %s,
@@ -229,21 +279,82 @@ public function void_pool_transaction() {
                     $item_id, 
                     $location_id
                 ));
+
+                if ($stock_update === false) {
+                    throw new Exception("Failed to update stock for item {$item_id}: " . $wpdb->last_error);
+                }
+
+                $reversed_count++;
+                error_log("✅ Stock reversed for item {$item_id}");
+            } else {
+                // ⚠️ WARNING: Stock record doesn't exist (shouldn't happen in normal flow)
+                error_log("⚠️ WARNING: Stock record not found for item {$item_id} @ {$location_id}");
+                
+                // Create new record with reversed quantity
+                $stock_insert = $wpdb->insert($tbl_stock, [
+                    'item_id' => $item_id,
+                    'location_id' => $location_id,
+                    'balance' => $reverse_qty,
+                    'updated_at' => current_time('mysql'),
+                    'last_ref' => 'VOID-' . $ref_id
+                ]);
+
+                if ($stock_insert === false) {
+                    throw new Exception("Failed to insert stock for item {$item_id}: " . $wpdb->last_error);
+                }
+
+                $reversed_count++;
+                error_log("✅ Stock record created for item {$item_id}");
             }
         }
 
-        // ✅ COMMIT
+        error_log("✅ Step 2: {$reversed_count} stock movements reversed");
+
+        // ====================================================================
+        // STEP 3: COMMIT TRANSACTION
+        // ====================================================================
         $wpdb->query('COMMIT');
+        error_log("✅ VOID SUCCESS: {$ref_id} marked as void, stock reversed");
+
+        // ====================================================================
+        // STEP 4: SEND SUCCESS RESPONSE
+        // ====================================================================
+        $response_message = $is_silent 
+            ? "Transaction {$ref_id} voided silently" 
+            : "Transaksi berhasil dibatalkan dan stok dikembalikan";
 
         wp_send_json_success([
-            'message' => 'Transaksi berhasil dibatalkan dan stok dikembalikan',
-            'ref_id' => $ref_id
+            'message' => $response_message,
+            'ref_id' => $ref_id,
+            'silent_mode' => $is_silent,
+            'items_reversed' => $reversed_count,
+            'debug' => [
+                'old_status' => $transaction->status,
+                'new_status' => 'void',
+                'total_riyal' => $transaction->total_riyal,
+                'total_idr' => $transaction->total_idr
+            ]
         ]);
 
     } catch (Exception $e) {
+        // ====================================================================
+        // ERROR HANDLING: ROLLBACK
+        // ====================================================================
         $wpdb->query('ROLLBACK');
-        error_log('❌ Void Error: ' . $e->getMessage());
-        wp_send_json_error('Gagal membatalkan transaksi: ' . $e->getMessage());
+        
+        $error_msg = $e->getMessage();
+        error_log('❌ Void Error: ' . $error_msg);
+        error_log('❌ Full Exception: ' . print_r($e, true));
+        
+        wp_send_json_error([
+            'message' => 'Gagal membatalkan transaksi: ' . $error_msg,
+            'ref_id' => $ref_id,
+            'debug' => [
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+                'trace' => $e->getTraceAsString()
+            ]
+        ]);
     }
 }
 
@@ -254,26 +365,28 @@ public function get_pool_history() {
     $today_str = current_time('Y-m-d');
     $tbl_pool = puri_table_name('T_POOL_TRANSACTIONS');
     
-    // ✅ Ambil SEMUA transaksi hari ini (apapun statusnya)
+    // ✅ JOIN dengan wp_users untuk ambil cashier name
     $rows = $wpdb->get_results($wpdb->prepare(
         "SELECT 
-            ref_id,
-            DATE_FORMAT(trx_date, '%%H:%%i') as time,
-            trade_mode,
-            customer_name,
-            total_riyal,
-            total_idr,
-            status,
-            payment_method,
-            created_by
-         FROM {$tbl_pool}
-         WHERE DATE(trx_date) = %s
-         ORDER BY trx_date DESC
+            p.ref_id,
+            DATE_FORMAT(p.trx_date, '%%H:%%i') as time,
+            p.trade_mode,
+            p.customer_name,
+            p.total_riyal,
+            p.total_idr,
+            p.status,
+            p.payment_method,
+            p.created_by,
+            u.display_name as cashier_name
+         FROM {$tbl_pool} p
+         LEFT JOIN {$wpdb->users} u ON p.created_by = u.ID
+         WHERE DATE(p.trx_date) = %s
+         ORDER BY p.trx_date DESC
          LIMIT 100",
         $today_str
     ));
     
-    // ✅ Hitung summary per status
+    // ✅ Process dengan struktur yang KONSISTEN
     $summary = [
         'pending' => 0,
         'verified' => 0,
@@ -293,9 +406,9 @@ public function get_pool_history() {
             'time' => $r->time,
             'trade_mode' => $r->trade_mode,
             'customer_name' => $r->customer_name,
-            'total_amount' => floatval($r->total_idr),
+            'total_amount' => floatval($r->total_idr), // ✅ RENAME untuk match frontend
             'status' => $r->status,
-            'cashier' => get_userdata($r->created_by)->display_name ?? 'Unknown'
+            'cashier' => $r->cashier_name ?: 'System' // ✅ TAMBAHKAN FIELD INI!
         ];
     }
     
@@ -304,7 +417,6 @@ public function get_pool_history() {
         'summary' => $summary
     ]);
 }
-
 
     /**
      * Enqueue CSS/JS Assets
@@ -1376,13 +1488,16 @@ async submitNewCustomer() {
 renderHistoryTable() {
     const $tb = $('#history_table tbody').empty();
     
-    if (!this.historyData.transactions || this.historyData.transactions.length === 0) {
-        $tb.html('<tr><td colspan="5" align="center" style="padding:20px; color:#999;">Belum ada transaksi hari ini.</td></tr>');
+    // ✅ VALIDASI DATA DENGAN BENAR
+    if (!this.historyData || !this.historyData.transactions || this.historyData.transactions.length === 0) {
+        $tb.html('<tr><td colspan="4" align="center" style="padding:20px; color:#999;">Belum ada transaksi hari ini.</td></tr>');
+        $('#box_history_summary').addClass('hidden'); // Hide summary jika kosong
         return;
     }
 
+    // ✅ RENDER SETIAP BARIS
     this.historyData.transactions.forEach((h) => {
-        // ✅ Status Badge dengan warna berbeda
+        // Status badge dengan warna berbeda
         const statusBadges = {
             'pending': '<span class="badge" style="background:#f59e0b; color:#fff;">⏳ Pending</span>',
             'verified': '<span class="badge" style="background:#3b82f6; color:#fff;">✓ Verified</span>',
@@ -1399,20 +1514,20 @@ renderHistoryTable() {
         
         // ✅ Disable action buttons jika sudah posted/void
         const canEdit = (h.status === 'pending' || h.status === 'verified');
-const actionButtons = canEdit ? `
-    <button type="button" class="button button-small edit-pool-btn" 
-            data-ref-id="${h.ref_id}" 
-            title="Edit">
-        <i class="fa fa-pencil-alt" style="color:#2271b1"></i>
-    </button>
-    <button type="button" class="button button-small void-pool-btn" 
-            data-ref-id="${h.ref_id}" 
-            title="Void">
-        <i class="fa fa-trash" style="color:#d63638"></i>
-    </button>
-` : `
-    <span style="color:#999; font-size:10px;">Locked</span>
-`;
+        const actionButtons = canEdit ? `
+            <button type="button" class="button button-small edit-pool-btn" 
+                    data-ref-id="${h.ref_id}" 
+                    title="Edit">
+                <i class="fa fa-pencil-alt" style="color:#2271b1"></i>
+            </button>
+            <button type="button" class="button button-small void-pool-btn" 
+                    data-ref-id="${h.ref_id}" 
+                    title="Void">
+                <i class="fa fa-trash" style="color:#d63638"></i>
+            </button>
+        ` : `
+            <span style="color:#999; font-size:10px;">Locked</span>
+        `;
         
         $tb.append(`
             <tr class="status-${h.status}">
@@ -1437,7 +1552,7 @@ const actionButtons = canEdit ? `
         `);
     });
     
-    // ✅ Update summary badge di header
+    // ✅ UPDATE SUMMARY BADGE DI HEADER
     if (this.historyData.summary) {
         const s = this.historyData.summary;
         $('#box_history_summary').removeClass('hidden').html(`
@@ -1448,7 +1563,6 @@ const actionButtons = canEdit ? `
         `);
     }
 }
-
 
 
   // Helper untuk konfirmasi penghapusan (Void)
@@ -1477,6 +1591,7 @@ confirmVoid(refId) {
                 data: {
                     action: 'puri_pos_void_pool_transaction',
                     ref_id: refId,
+					silent_mode: '1',
                     nonce: '<?php echo wp_create_nonce("puri_pos_checkout"); ?>'
                 },
                 success: (r) => {
@@ -1505,105 +1620,404 @@ confirmVoid(refId) {
 
 // ✅ Silent void (untuk edit flow)
 silentVoid(refId) {
-    U.ajax({
-        data: { 
-            action: 'puri_pos_void_pool_transaction', 
-            ref_id: refId,
-            nonce: '<?php echo wp_create_nonce("puri_pos_checkout"); ?>'
-        },
-        success: (r) => {
-            console.log('✅ Silent void success:', refId);
-        },
-        error: (xhr) => {
-            console.error('❌ Silent void failed:', xhr.responseText);
-        }
+    return new Promise((resolve, reject) => {
+        U.ajax({
+            data: { 
+                action: 'puri_pos_void_pool_transaction', 
+                ref_id: refId,
+                nonce: '<?php echo wp_create_nonce("puri_pos_checkout"); ?>'
+            },
+            success: (r) => {
+                if (r.success) {
+                    console.log('✅ Silent void success:', refId);
+                    resolve(r);
+                } else {
+                    console.error('❌ Silent void failed:', r.data);
+                    reject(r.data);
+                }
+            },
+            error: (xhr) => {
+                console.error('❌ Silent void AJAX error:', xhr.responseText);
+                reject(xhr.responseText);
+            }
+        });
     });
 }
+
 
 /* =====================================================
  * EDIT FROM POOL LOGIC  - CRUD SCHEME
  * ===================================================== */
+/**
+ * ============================================================================
+ * EDIT FROM POOL - COMPLETE IMPLEMENTATION
+ * ============================================================================
+ * Flow:
+ * 1. User clicks Edit button → Confirmation dialog
+ * 2. Fetch transaction snapshot from backend
+ * 3. Validate transaction status (must be pending/verified)
+ * 4. Silent void old transaction (reverse stock)
+ * 5. Restore data to cart & form
+ * 6. User can modify & checkout as new transaction
+ * ============================================================================
+ */
+
+
+/**
+ * ============================================================================
+ * EDIT FROM POOL - COMPLETE IMPLEMENTATION
+ * ============================================================================
+ * Flow:
+ * 1. User clicks Edit button → Confirmation dialog
+ * 2. Fetch transaction snapshot from backend
+ * 3. Validate transaction status (must be pending/verified)
+ * 4. Silent void old transaction (reverse stock)
+ * 5. Restore data to cart & form
+ * 6. User can modify & checkout as new transaction
+ * ============================================================================
+ */
+
 editFromPool(refId) {
-    console.log('🔍 Edit Pool Called, ref_id:', refId); // Debug log
+    console.log('🖱️ Edit Button Clicked, ref_id:', refId);
     
+    // ========================================================================
+    // STEP 1: CONFIRMATION DIALOG
+    // ========================================================================
     Swal.fire({
         title: 'Edit Transaksi?',
-        text: "Data akan dikembalikan ke keranjang untuk diperbaiki.",
+        html: `
+            <p>Transaksi <code>${refId}</code> akan dikembalikan ke keranjang untuk diperbaiki.</p>
+            <p><strong>⚠️ Transaksi lama akan dibatalkan (void).</strong></p>
+            <p style="color:#666; font-size:13px;">Stok fisik akan dikembalikan ke lokasi asal.</p>
+        `,
         icon: 'warning',
         showCancelButton: true,
         confirmButtonColor: '#2271b1',
-        confirmButtonText: 'Ya, Bongkar Keranjang'
+        cancelButtonColor: '#999',
+        confirmButtonText: '<i class="fa fa-box-open"></i> Ya, Bongkar Keranjang',
+        cancelButtonText: 'Batal',
+        reverseButtons: true
     }).then((result) => {
-        if (result.isConfirmed) {
-            Swal.fire({
-                title: 'Loading...',
-                text: 'Mengambil data transaksi',
-                didOpen: () => Swal.showLoading()
-            });
+        if (!result.isConfirmed) {
+            console.log('❌ Edit cancelled by user');
+            return;
+        }
 
-            $.ajax({
-                url: ajaxurl,
-                type: 'POST',
-                data: {
-                    action: 'puri_pos_get_pool_snapshot',
-                    ref_id: refId,
-                    nonce: '<?php echo wp_create_nonce("puri_pos_checkout"); ?>'
-                },
-                success: (r) => {
-                    console.log('📦 AJAX Response:', r); // Debug log
-                    
-                    if (r.success) {
-                        this.cart = r.data.cart;
-                        this.tradeMode = r.data.trade_mode;
-                        this.currentEditRef = refId;
+        // ====================================================================
+        // STEP 2: SHOW LOADING INDICATOR
+        // ====================================================================
+        Swal.fire({
+            title: 'Memproses...',
+            html: `
+                <div style="padding:20px;">
+                    <i class="fa fa-spinner fa-spin" style="font-size:40px; color:#2271b1;"></i>
+                    <p style="margin-top:15px;">Mengambil data transaksi</p>
+                </div>
+            `,
+            showConfirmButton: false,
+            allowOutsideClick: false,
+            allowEscapeKey: false
+        });
+
+        // ====================================================================
+        // STEP 3: FETCH TRANSACTION SNAPSHOT
+        // ====================================================================
+        $.ajax({
+            url: ajaxurl,
+            type: 'POST',
+            data: {
+                action: 'puri_pos_get_pool_snapshot',
+                ref_id: refId,
+                nonce: '<?php echo wp_create_nonce("puri_pos_checkout"); ?>'
+            },
+            success: (response) => {
+                console.log('📦 AJAX Response:', response);
+
+                // ============================================================
+                // VALIDATION: Check if request successful
+                // ============================================================
+                if (!response.success) {
+                    console.error('❌ Snapshot fetch failed:', response.data);
+                    Swal.fire({
+                        icon: 'error',
+                        title: 'Gagal Mengambil Data',
+                        text: response.data || 'Terjadi kesalahan saat mengambil data transaksi',
+                        confirmButtonColor: '#d63638'
+                    });
+                    return;
+                }
+
+                const snapshot = response.data;
+                
+                // ============================================================
+                // VALIDATION: Check data completeness
+                // ============================================================
+                if (!snapshot.cart || !Array.isArray(snapshot.cart) || snapshot.cart.length === 0) {
+                    console.error('❌ Invalid cart data:', snapshot.cart);
+                    Swal.fire({
+                        icon: 'error',
+                        title: 'Data Tidak Valid',
+                        text: 'Keranjang transaksi kosong atau rusak',
+                        confirmButtonColor: '#d63638'
+                    });
+                    return;
+                }
+
+                console.log('✅ Snapshot valid, proceeding to void...');
+
+                // ============================================================
+                // STEP 4: VOID OLD TRANSACTION (Silent Mode)
+                // ============================================================
+                this.silentVoid(refId)
+                    .then(() => {
+                        console.log('✅ Void completed successfully');
                         
-                        $(`input[name="trade_mode"][value="${this.tradeMode}"]`).prop('checked', true);
-                        this.$cust.val(r.data.cust_id).trigger('change');
-                        this.$payMethod.val(r.data.pay_method);
-                        $('#delivery_method').val(r.data.delivery_method);
-
-                        this.renderCart();
-                        this.applyModeGuard();
-                        this.lockSession();
-                        this.silentVoid(refId);
-
+                        // ====================================================
+                        // STEP 5: RESTORE DATA TO CART & FORM
+                        // ====================================================
+                        this.restoreFromSnapshot(snapshot, refId);
+                        
+                        // ====================================================
+                        // STEP 6: SUCCESS FEEDBACK
+                        // ====================================================
                         Swal.fire({
                             icon: 'success',
-                            title: 'Restored!',
-                            text: 'Silakan lakukan perbaikan dan checkout ulang.',
-                            timer: 2000
+                            title: 'Berhasil Dikembalikan!',
+                            html: `
+                                <p>Transaksi <code>${refId}</code> berhasil dikembalikan ke keranjang.</p>
+                                <p style="color:#666; margin-top:10px;">Silakan lakukan perbaikan dan checkout ulang.</p>
+                            `,
+                            timer: 2500,
+                            showConfirmButton: false
                         });
 
-                        $('html, body').animate({
-                            scrollTop: $('#panelInputTransaksi').offset().top - 100
+                        // Scroll to transaction panel for better UX
+                        setTimeout(() => {
+                            $('html, body').animate({
+                                scrollTop: $('#panelInputTransaksi').offset().top - 100
+                            }, 500);
                         }, 500);
-                    } else {
-                        Swal.fire('Error', r.data || 'Gagal mengambil data', 'error');
-                    }
-                },
-                error: (xhr, status, err) => {
-                    console.error('❌ AJAX Error:', xhr.responseText);
-                    Swal.fire('Error', 'Network error: ' + err, 'error');
-                }
-            });
-        }
+                    })
+                    .catch((error) => {
+                        console.error('❌ Void failed:', error);
+                        
+                        // ====================================================
+                        // ERROR HANDLING: Void failed but data restored
+                        // ====================================================
+                        Swal.fire({
+                            icon: 'warning',
+                            title: 'Peringatan',
+                            html: `
+                                <p><strong>Gagal membatalkan transaksi lama.</strong></p>
+                                <p>Error: ${error}</p>
+                                <hr style="margin:15px 0;">
+                                <p style="color:#666;">Data tetap ter-restore ke keranjang, tapi checkout mungkin akan gagal karena transaksi lama belum dibatalkan.</p>
+                                <p style="color:#d63638; font-weight:bold;">Harap hubungi supervisor jika masalah berlanjut.</p>
+                            `,
+                            confirmButtonColor: '#f59e0b',
+                            confirmButtonText: 'OK, Saya Mengerti'
+                        });
+
+                        // Still restore data for manual intervention
+                        this.restoreFromSnapshot(snapshot, refId);
+                    });
+
+            },
+            error: (xhr, status, err) => {
+                console.error('❌ AJAX Error:', xhr.responseText);
+                
+                Swal.fire({
+                    icon: 'error',
+                    title: 'Network Error',
+                    html: `
+                        <p>Gagal terhubung ke server</p>
+                        <p style="color:#999; font-size:12px; margin-top:10px;">Error: ${err}</p>
+                        <hr style="margin:15px 0;">
+                        <p style="font-size:13px;">Coba:</p>
+                        <ul style="text-align:left; padding-left:20px; font-size:13px;">
+                            <li>Refresh halaman (F5)</li>
+                            <li>Periksa koneksi internet</li>
+                            <li>Hubungi IT support jika masalah berlanjut</li>
+                        </ul>
+                    `,
+                    confirmButtonColor: '#d63638'
+                });
+            }
+        });
     });
 }
 
-
-
-/* ==============================
+/**
+ * ============================================================================
+ * SILENT VOID - Promise-based Transaction Cancellation
+ * ============================================================================
+ * Cancels old transaction without showing alerts (for edit flow)
+ * Returns Promise for proper async handling
+ * ============================================================================
+ */
 silentVoid(refId) {
-    U.ajax({
-        data: { 
-            action: 'puri_pos_void_pool', 
-            ref_id: refId,
-            mode: 'silent' // Tanpa alert karena ini proses edit
-        }
+    return new Promise((resolve, reject) => {
+        console.log('🔇 Starting silent void for:', refId);
+        
+        $.ajax({
+            url: ajaxurl,
+            type: 'POST',
+            data: { 
+                action: 'puri_pos_void_pool_transaction', 
+                ref_id: refId,
+                silent_mode: '1', // Flag to skip user notifications in backend
+                nonce: '<?php echo wp_create_nonce("puri_pos_checkout"); ?>'
+            },
+            success: (response) => {
+                if (response.success) {
+                    console.log('✅ Silent void successful:', refId);
+                    resolve(response.data);
+                } else {
+                    console.error('❌ Silent void failed:', response.data);
+                    reject(response.data || 'Void operation failed');
+                }
+            },
+            error: (xhr, status, error) => {
+                console.error('❌ Silent void AJAX error:', xhr.responseText);
+                reject(`Network error: ${error}`);
+            }
+        });
     });
 }
-==================================== */
 
+/**
+ * ============================================================================
+ * RESTORE FROM SNAPSHOT - Data Restoration Logic
+ * ============================================================================
+ * Restores transaction data to cart and form controls
+ * ============================================================================
+ */
+restoreFromSnapshot(snapshot, refId) {
+    console.log('📦 Restoring snapshot:', snapshot);
+    
+    // ========================================================================
+    // 1. RESTORE TRADE MODE
+    // ========================================================================
+    this.tradeMode = snapshot.trade_mode;
+    $(`input[name="trade_mode"][value="${this.tradeMode}"]`).prop('checked', true);
+    this.applyModeGuard(); // Apply visual styling
+    console.log('✅ Trade mode restored:', this.tradeMode);
+    
+    // ========================================================================
+    // 2. RESTORE CUSTOMER
+    // ========================================================================
+    const custId = snapshot.cust_id;
+    console.log('👤 Restoring customer ID:', custId);
+    
+    if (custId && custId > 0) {
+        // Set value and trigger Select2 refresh
+        this.$cust.val(custId).trigger('change.select2');
+        
+        // Wait for Select2 to finish rendering, then validate
+        setTimeout(() => {
+            const selectedOption = this.$cust.find(':selected');
+            
+            if (selectedOption.length && selectedOption.val() == custId) {
+                console.log('✅ Customer restored:', selectedOption.text());
+                this.selectCustomer(); // Populate customer info box
+            } else {
+                console.error('❌ Customer restoration failed for ID:', custId);
+                
+                Swal.fire({
+                    icon: 'warning',
+                    title: 'Customer Tidak Ditemukan',
+                    text: 'Data customer tidak ter-restore. Silakan pilih ulang customer.',
+                    confirmButtonColor: '#f59e0b',
+                    timer: 3000
+                });
+            }
+        }, 150); // Small delay for Select2 DOM update
+        
+    } else {
+        console.warn('⚠️ No valid customer ID in snapshot');
+        this.clearCustomer();
+    }
+    
+    // ========================================================================
+    // 3. RESTORE CART ITEMS
+    // ========================================================================
+    this.cart = snapshot.cart;
+    console.log('🛒 Cart restored with items:', this.cart.length);
+    
+    // Validate cart data structure
+    if (this.cart.length > 0) {
+        // Check if first item has required fields
+        const firstItem = this.cart[0];
+        const requiredFields = ['id', 'item_id', 'sku', 'name', 'denom', 'qty', 'rate'];
+        const missingFields = requiredFields.filter(field => !(field in firstItem));
+        
+        if (missingFields.length > 0) {
+            console.error('❌ Cart items missing fields:', missingFields);
+            console.error('Sample item:', firstItem);
+        }
+    }
+    
+    this.renderCart(); // Update cart display
+    
+    // ========================================================================
+    // 4. RESTORE PAYMENT & DELIVERY OPTIONS
+    // ========================================================================
+    if (snapshot.pay_method) {
+        this.$payMethod.val(snapshot.pay_method);
+        console.log('💳 Payment method restored:', snapshot.pay_method);
+    }
+    
+    if (snapshot.delivery_method) {
+        $('#delivery_method').val(snapshot.delivery_method);
+        console.log('🚚 Delivery method restored:', snapshot.delivery_method);
+    }
+    
+    // ========================================================================
+    // 5. SET EDIT MODE FLAG
+    // ========================================================================
+    this.currentEditRef = refId;
+    console.log('✏️ Edit mode activated, replacing:', refId);
+    
+    // ========================================================================
+    // 6. LOCK SESSION (Prevent mode switching during edit)
+    // ========================================================================
+    this.lockSession();
+    
+    // ========================================================================
+    // 7. VISUAL FEEDBACK
+    // ========================================================================
+    // Add visual indicator that we're in edit mode
+    const $panel = $('#panelInputTransaksi');
+    $panel.addClass('edit-mode');
+    
+    // Add banner notification
+    if ($('.edit-mode-banner').length === 0) {
+        $panel.prepend(`
+            <div class="edit-mode-banner" style="
+                background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+                color: white;
+                padding: 12px 20px;
+                margin: -15px -15px 15px -15px;
+                border-radius: 6px 6px 0 0;
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            ">
+                <i class="fa fa-pencil-alt" style="font-size:18px;"></i>
+                <div style="flex:1;">
+                    <strong style="display:block; font-size:14px;">EDIT MODE</strong>
+                    <small style="opacity:0.9;">Memperbaiki transaksi: <code style="background:rgba(255,255,255,0.2); padding:2px 6px; border-radius:3px;">${refId}</code></small>
+                </div>
+                <button type="button" class="button button-small" onclick="location.reload();" style="background:rgba(255,255,255,0.2); border:none; color:white;">
+                    <i class="fa fa-times"></i> Batalkan Edit
+                </button>
+            </div>
+        `);
+    }
+    
+    console.log('✅ Snapshot restoration complete');
+}
 
   /* ---------------- SESSION & DATA ---------------- */
   lockSession() { $('input[name="trade_mode"]').prop('disabled', true); }
@@ -1613,22 +2027,46 @@ silentVoid(refId) {
     this.$panel.removeClass('mode-buy mode-sell').addClass(`mode-${this.tradeMode}`);
   }
 
-  loadStockAndHistory() {
+loadStockAndHistory() {
+    // ✅ LOAD STOCK (existing code tetap)
     U.ajax({
-      data:{ action:'puri_pos_get_stock_summary' },
-      success: r => { if(r.success) { this.stockData = r.data; this.renderStockTable(); } }
+        data: { action: 'puri_pos_get_stock_summary' },
+        success: r => { 
+            if(r.success) { 
+                this.stockData = r.data; 
+                this.renderStockTable(); 
+            } else {
+                console.error('❌ Stock Load Failed:', r.data);
+            }
+        },
+        error: (xhr) => {
+            console.error('❌ Stock AJAX Error:', xhr.responseText);
+        }
     });
-	U.ajax({
+    
+    // ✅ LOAD HISTORY (FIXED!)
+    U.ajax({
         data: { action: 'puri_pos_get_pool_history' },
         success: r => {
             if(r.success) {
+                console.log('✅ History Data Received:', r.data);
                 this.historyData = r.data;
-                this.renderHistoryTable(); // Memanggil fungsi yang baru kita buat
+                this.renderHistoryTable(); // ✅ Sekarang akan jalan!
+            } else {
+                console.error('❌ History Load Failed:', r.data);
+                $('#history_table tbody').html(
+                    '<tr><td colspan="4" align="center" style="padding:20px; color:#d63638;">Error loading history</td></tr>'
+                );
             }
+        },
+        error: (xhr) => {
+            console.error('❌ History AJAX Error:', xhr.responseText);
+            $('#history_table tbody').html(
+                '<tr><td colspan="4" align="center" style="padding:20px; color:#d63638;">Network Error</td></tr>'
+            );
         }
     });
-  }
-
+}
   renderStockTable() {
     // Logic sorting (Tetap sama)
     const html = this.stockData.map(s => `
@@ -1641,20 +2079,28 @@ silentVoid(refId) {
   }
 
   /* ---------------- CHECKOUT (Sinkron Mozart) ---------------- */
-  handleCheckout() {
+handleCheckout() {
     if (!this.cart.length) return Swal.fire('Empty','Cart is empty','warning');
     if (!this.currentCustomer) return Swal.fire('Customer','Select customer','error');
 
+    const isEditMode = this.currentEditRef !== null;
+    const actionText = isEditMode ? 'Update Transaksi' : 'Proses Transaksi';
+    
     Swal.fire({
-      title: 'Confirm Transaction?',
-      text: `Total: ${$('#cart_total_idr').text()}`,
-      icon: 'question',
-      showCancelButton: true,
-      confirmButtonText: 'Process'
+        title: `${actionText}?`,
+        html: `
+            <p>Total: ${$('#cart_total_idr').text()}</p>
+            ${isEditMode ? `<p style="color:#f59e0b; font-weight:bold;">⚠️ Ini akan mengganti transaksi: ${this.currentEditRef}</p>` : ''}
+        `,
+        icon: 'question',
+        showCancelButton: true,
+        confirmButtonText: actionText,
+        confirmButtonColor: isEditMode ? '#f59e0b' : '#2271b1'
     }).then(r => {
-      if(r.isConfirmed) this.processTransaction();
+        if(r.isConfirmed) this.processTransaction();
     });
-  }
+}
+
 
   processTransaction() {
     Swal.fire({ title:'Processing...', didOpen:()=>Swal.showLoading() });
@@ -1670,24 +2116,44 @@ silentVoid(refId) {
     fd.append('cust_id',    this.currentCustomer.id);
     fd.append('payment_method', this.$payMethod.val()); // Kirim ID Akun (Kas/Bank)
 	if (this.currentEditRef) fd.append('old_ref_id', this.currentEditRef);
-
+    console.log('✏️ EDIT MODE: Replacing', this.currentEditRef);
+	
     U.ajax({
       type: 'POST',
       data: fd,
       processData: false,
       contentType: false,
-      success: r => {
-        if(r.success) {
-          Swal.fire('Success', 'Ref: ' + r.data.ref_id, 'success');
-          this.cart = [];
-          this.unlockSession();
-          this.renderCart();
-          this.loadStockAndHistory(); // Refresh stok real-time
-        } else {
-          Swal.fire('Failed', r.data, 'error');
-        }
-      }
-    });
+// Inside processTransaction() success callback:
+success: r => {
+    if(r.success) {
+        const wasEditMode = this.currentEditRef !== null;
+        
+        Swal.fire({
+            icon: 'success',
+            title: wasEditMode ? 'Transaksi Berhasil Diupdate!' : 'Checkout Berhasil!',
+            html: `
+                <p>Ref: <code>${r.data.ref_id}</code></p>
+                ${wasEditMode ? `<p style="color:#666; font-size:13px;">Menggantikan: <del>${this.currentEditRef}</del></p>` : ''}
+            `,
+            timer: 2500
+        });
+        
+        // 🔧 CRITICAL: Reset edit mode flag
+        this.currentEditRef = null;
+        
+        // Remove edit mode indicator
+        $('#panelInputTransaksi').removeClass('edit-mode');
+        $('.edit-mode-banner').remove();
+        
+        // Clear cart and unlock
+        this.cart = [];
+        this.unlockSession();
+        this.renderCart();
+        this.loadStockAndHistory();
+    } else {
+        Swal.fire('Failed', r.data, 'error');
+    }
+}    });
   }
 }
 
@@ -1925,8 +2391,31 @@ public function ajax_process_checkout() {
     $items_raw = json_decode(stripslashes($_POST['cart'] ?? $_POST['items'] ?? '[]'), true);
     $trade_mode = sanitize_text_field($_POST['trade_mode'] ?? 'sell');
     $payment_method = sanitize_text_field($_POST['payment_method'] ?? 'cash');
-    $delivery_method = sanitize_text_field($_POST['delivery_method'] ?? 'pickup');
+	$delivery_method = sanitize_text_field($_POST['delivery_method'] ?? 'pickup');
     $location_id = sanitize_text_field($_POST['location_id'] ?? get_option('puri_pos_default_location', 'laci_kasir'));
+	
+// 🔧 PATCH: Detect EDIT mode
+$old_ref_id = sanitize_text_field($_POST['old_ref_id'] ?? '');
+$is_edit_mode = !empty($old_ref_id);
+
+if ($is_edit_mode) {
+    error_log("✏️ EDIT MODE DETECTED: Replacing {$old_ref_id}");
+    
+    // ✅ Validate old transaction exists and is void
+    $tbl_pool = puri_table_name('T_POOL_TRANSACTIONS');
+    $old_status = $wpdb->get_var($wpdb->prepare(
+        "SELECT status FROM {$tbl_pool} WHERE ref_id = %s",
+        $old_ref_id
+    ));
+    
+    if ($old_status !== 'void') {
+        error_log("❌ EDIT ERROR: Old transaction not voided - status: {$old_status}");
+        wp_send_json_error(['message' => 'Transaksi lama belum dibatalkan. Refresh page dan coba lagi.']);
+    }
+}
+
+	
+	
 
     if ($customer_id <= 0) {
         wp_send_json_error(['message' => 'Pilih customer terlebih dahulu']);
@@ -2043,6 +2532,13 @@ public function ajax_process_checkout() {
     // ========================================================================
     // 7. UPDATE T_STOCK (REAL INVENTORY) - For Stock Validation
     // ========================================================================
+// ========================================================================
+// 7. UPDATE T_STOCK (REAL INVENTORY) - For Stock Validation
+// ========================================================================
+// 🔧 PATCH: Skip jika EDIT mode (stok sudah di-reverse oleh silentVoid)
+if (!$is_edit_mode) {
+    error_log("📦 UPDATING PHYSICAL STOCK (New Transaction)");
+    
     foreach ($items_raw as $it) {
         $item_id = intval($it['item_id'] ?? $it['id'] ?? 0);
         $qty = floatval($it['qty'] ?? 0);
@@ -2060,19 +2556,24 @@ public function ajax_process_checkout() {
 
         if ($exists) {
             $wpdb->query($wpdb->prepare(
-                "UPDATE {$tbl_stock} SET balance = balance + %f, updated_at = %s 
+                "UPDATE {$tbl_stock} SET balance = balance + %f, updated_at = %s, last_ref = %s
                  WHERE item_id = %d AND location_id = %s",
-                $qty_change, current_time('mysql'), $item_id, $location_id
+                $qty_change, current_time('mysql'), $ref_id, $item_id, $location_id
             ));
         } else {
             $wpdb->insert($tbl_stock, [
                 'item_id' => $item_id,
                 'location_id' => $location_id,
                 'balance' => $qty_change,
-                'updated_at' => current_time('mysql')
+                'updated_at' => current_time('mysql'),
+                'last_ref' => $ref_id
             ]);
         }
     }
+} else {
+    error_log("⏭️ SKIPPING PHYSICAL STOCK UPDATE (Edit Mode - Already reversed by silentVoid)");
+}
+
 
     // ========================================================================
     // 8. SUCCESS RESPONSE
