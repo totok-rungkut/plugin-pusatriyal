@@ -652,7 +652,7 @@ $items = $wpdb->get_results($wpdb->prepare("
                     data-denom="<?php echo esc_attr($it->denom_value); ?>"
                     data-rate="<?php echo esc_attr($it->sell_rate); ?>"
                     data-stock="<?php echo esc_attr($it->stock_balance); ?>">
-                <?php echo esc_html($it->sku . ' - ' . $it->name . ' (Stok: ' . $it->stock_balance . ')'); ?>
+                <?php echo esc_html($it->sku . ' - ' . $it->name ); ?>
             </option>
         <?php endforeach; ?>
         
@@ -1456,32 +1456,37 @@ async submitNewCustomer() {
     if (!this.cart.length) this.unlockSession();
   }
 
-  renderCart() {
+renderCart() {
     const $tb = $('#cart_table tbody').empty();
     let totalV = 0, totalI = 0;
 
-    if (!this.cart.length) {
-      return $tb.html(`<tr><td colspan="5" align="center">Cart is empty</td></tr>`);
+    // Jika ada isi cart, lakukan loop
+    if (this.cart.length > 0) {
+        this.cart.forEach((x, n) => {
+          totalV += x.total_valas; 
+          totalI += x.subtotal_idr;
+          $tb.append(`
+            <tr>
+              <td>${x.name}</td>
+              <td class="tc">${x.qty}</td>
+              <td class="tr">${U.fmt(x.total_valas)}</td>
+              <td class="tr">${U.idr(x.subtotal_idr)}</td>
+              <td class="tc">
+                <button class="btn-remove-item" data-index="${n}">❌</button>
+              </td>
+            </tr>`);
+        });
+    } else {
+        // Jika kosong, tampilkan placeholder
+        $tb.html(`<tr><td colspan="5" align="center" style="padding: 30px; color:#999;">
+                  <i class="fa-solid fa-cart-shopping" style="font-size:40px; opacity:0.3;"></i><br>Cart is empty</td></tr>`);
     }
 
-    this.cart.forEach((x, n) => {
-      totalV += x.total_valas; totalI += x.subtotal_idr;
-      $tb.append(`
-        <tr>
-          <td>${x.name}</td>
-          <td class="tc">${x.qty}</td>
-          <td class="tr">${U.fmt(x.total_valas)}</td>
-          <td class="tr">${U.idr(x.subtotal_idr)}</td>
-          <td class="tc">
-            <button class="btn-remove-item" data-index="${n}">❌</button>
-          </td>
-        </tr>`);
-    });
-
+    // UPDATE: Label total harus selalu diupdate (menjadi 0 jika cart kosong)
     $('#cart_total_riyal').text(U.fmt(totalV));
     $('#cart_total_idr').text('Rp ' + U.idr(totalI));
   }
-
+  
 /* =====================================================
    * RENDER HISTORY (POOL MONITOR)
    * ===================================================== */
@@ -2020,8 +2025,23 @@ restoreFromSnapshot(snapshot, refId) {
 }
 
   /* ---------------- SESSION & DATA ---------------- */
-  lockSession() { $('input[name="trade_mode"]').prop('disabled', true); }
-  unlockSession() { $('input[name="trade_mode"]').prop('disabled', false); }
+	lockSession() { $('input[name="trade_mode"]').prop('disabled', true); }
+	unlockSession() { $('input[name="trade_mode"]').prop('disabled', false); }
+
+	fullReset() {
+		this.cart = [];
+		this.renderCart();
+		this.unlockSession();
+		this.$cust.val(null).trigger('change'); 
+		this.clearCustomer(); 
+		this.$item.val(null).trigger('change');
+		$('#btn_clear_form').click(); 
+		this.currentEditRef = null;
+		$('#panelInputTransaksi').removeClass('edit-mode');
+		$('.edit-mode-banner').remove();
+		console.log('✅ UI State fully reset.');
+	  }
+
 
   applyModeGuard() {
     this.$panel.removeClass('mode-buy mode-sell').addClass(`mode-${this.tradeMode}`);
@@ -2067,8 +2087,8 @@ loadStockAndHistory() {
         }
     });
 }
-  renderStockTable() {
-    // Logic sorting (Tetap sama)
+renderStockTable() {
+    // 1. Update Tabel Stock Card (Bagian Bawah)
     const html = this.stockData.map(s => `
       <tr>
         <td><strong>${s.name}</strong></td>
@@ -2076,8 +2096,23 @@ loadStockAndHistory() {
         <td class="tr">${U.fmt(s.sar_end)}</td>
       </tr>`).join('');
     $('#stock_table tbody').html(html);
-  }
 
+    // 2. PATCH: Update Dropdown Item (Select2) agar sinkron dengan stok terbaru
+    this.stockData.forEach(s => {
+        // Cari option yang memiliki SKU yang sama
+        const $opt = this.$item.find(`option[data-sku="${s.sku}"]`);
+        if ($opt.length) {
+            // Update atribut data-stock dan label teksnya
+            $opt.attr('data-stock', s.qty_end);
+            $opt.text(`${s.sku} - ${s.name} (Stok: ${U.fmt(s.qty_end)})`);
+        }
+    });
+
+    // Beritahu Select2 bahwa data telah berubah secara internal
+    this.$item.trigger('change.select2'); 
+  }
+  
+  
   /* ---------------- CHECKOUT (Sinkron Mozart) ---------------- */
 handleCheckout() {
     if (!this.cart.length) return Swal.fire('Empty','Cart is empty','warning');
@@ -2102,59 +2137,52 @@ handleCheckout() {
 }
 
 
-  processTransaction() {
-    Swal.fire({ title:'Processing...', didOpen:()=>Swal.showLoading() });
+	processTransaction() {
+		Swal.fire({ title:'Processing...', didOpen:()=>Swal.showLoading() });
 
-    const fd = new FormData();
-    fd.append('action', 'puri_pos_checkout');
-    fd.append('nonce',  '<?php echo wp_create_nonce("puri_pos_checkout"); ?>');
-	
-	
-	
-    fd.append('cart',   JSON.stringify(this.cart)); // Sekarang isinya key Mozart
-    fd.append('trade_mode', this.tradeMode);
-    fd.append('cust_id',    this.currentCustomer.id);
-    fd.append('payment_method', this.$payMethod.val()); // Kirim ID Akun (Kas/Bank)
-	if (this.currentEditRef) fd.append('old_ref_id', this.currentEditRef);
-    console.log('✏️ EDIT MODE: Replacing', this.currentEditRef);
-	
-    U.ajax({
-      type: 'POST',
-      data: fd,
-      processData: false,
-      contentType: false,
-// Inside processTransaction() success callback:
-success: r => {
-    if(r.success) {
-        const wasEditMode = this.currentEditRef !== null;
-        
-        Swal.fire({
-            icon: 'success',
-            title: wasEditMode ? 'Transaksi Berhasil Diupdate!' : 'Checkout Berhasil!',
-            html: `
-                <p>Ref: <code>${r.data.ref_id}</code></p>
-                ${wasEditMode ? `<p style="color:#666; font-size:13px;">Menggantikan: <del>${this.currentEditRef}</del></p>` : ''}
-            `,
-            timer: 2500
-        });
-        
-        // 🔧 CRITICAL: Reset edit mode flag
-        this.currentEditRef = null;
-        
-        // Remove edit mode indicator
-        $('#panelInputTransaksi').removeClass('edit-mode');
-        $('.edit-mode-banner').remove();
-        
-        // Clear cart and unlock
-        this.cart = [];
-        this.unlockSession();
-        this.renderCart();
-        this.loadStockAndHistory();
-    } else {
-        Swal.fire('Failed', r.data, 'error');
-    }
-}    });
-  }
+		const fd = new FormData();
+		fd.append('action', 'puri_pos_checkout');
+		fd.append('nonce',  '<?php echo wp_create_nonce("puri_pos_checkout"); ?>');
+		
+		
+		
+		fd.append('cart',   JSON.stringify(this.cart)); // Sekarang isinya key Mozart
+		fd.append('trade_mode', this.tradeMode);
+		fd.append('cust_id',    this.currentCustomer.id);
+		fd.append('payment_method', this.$payMethod.val()); // Kirim ID Akun (Kas/Bank)
+		if (this.currentEditRef) fd.append('old_ref_id', this.currentEditRef);
+		console.log('✏️ EDIT MODE: Replacing', this.currentEditRef);
+		
+		U.ajax({
+			type: 'POST',
+			data: fd,
+			processData: false,
+			contentType: false,
+
+			// Inside processTransaction() success callback:
+			success: r => {
+				if(r.success) {
+					const wasEditMode = this.currentEditRef !== null;
+					
+					Swal.fire({
+						icon: 'success',
+						title: wasEditMode ? 'Transaksi Diupdate!' : 'Checkout Berhasil!',
+						html: `<p>Ref: <code>${r.data.ref_id}</code></p>`,
+						timer: 2000,
+						showConfirmButton: false
+					});
+
+					// Memanggil fungsi reset otomatis untuk membersihkan semua panel
+					this.fullReset(); 
+					
+					// Refresh tabel mutasi dan stok di bagian bawah
+					this.loadStockAndHistory(); 
+				} else {
+					Swal.fire('Failed', r.data, 'error');
+				}
+			}
+		});
+	}
 }
 
 // Global Export agar bisa diakses jika ada script luar (Optional)
@@ -2529,50 +2557,103 @@ if ($is_edit_mode) {
         ]);
     }
 
-    // ========================================================================
-    // 7. UPDATE T_STOCK (REAL INVENTORY) - For Stock Validation
-    // ========================================================================
 // ========================================================================
-// 7. UPDATE T_STOCK (REAL INVENTORY) - For Stock Validation
+// 7. UPDATE T_STOCK (REAL INVENTORY)
 // ========================================================================
-// 🔧 PATCH: Skip jika EDIT mode (stok sudah di-reverse oleh silentVoid)
-if (!$is_edit_mode) {
-    error_log("📦 UPDATING PHYSICAL STOCK (New Transaction)");
+// ✅ CRITICAL: ALWAYS update stock, regardless of edit mode
+// Why? Because:
+// - silentVoid() already reversed the old transaction stock
+// - This new checkout is treated as a fresh transaction
+// - Stock movements must always be recorded for audit trail
+
+error_log("📦 PROCESSING STOCK UPDATE" . ($is_edit_mode ? " [EDIT MODE]" : " [NEW TRANSACTION]"));
+
+foreach ($items_raw as $it) {
+    $item_id = intval($it['item_id'] ?? $it['id'] ?? 0);
+    $qty = floatval($it['qty'] ?? 0);
     
-    foreach ($items_raw as $it) {
-        $item_id = intval($it['item_id'] ?? $it['id'] ?? 0);
-        $qty = floatval($it['qty'] ?? 0);
-
-        if ($item_id <= 0 || $qty <= 0) continue;
-
-        // Direction
-        $qty_change = ($trade_mode === 'sell') ? -$qty : $qty;
-
-        // ✅ UPSERT ke T_STOCK
-        $exists = $wpdb->get_var($wpdb->prepare(
-            "SELECT id FROM {$tbl_stock} WHERE item_id = %d AND location_id = %s",
+    if ($item_id <= 0 || $qty <= 0) {
+        error_log("⚠️ Skipping invalid item: ID={$item_id}, Qty={$qty}");
+        continue;
+    }
+    
+    // Get wp_post_id for cross-reference
+    $wp_post_id = $wpdb->get_var($wpdb->prepare(
+        "SELECT wp_post_id FROM {$tbl_items} WHERE id = %d",
+        $item_id
+    ));
+    
+    // Stock direction: SELL = minus, BUY = plus
+    $qty_change = ($trade_mode === 'sell') ? -$qty : $qty;
+    
+    // Check if stock record exists
+    $stock_id = $wpdb->get_var($wpdb->prepare(
+        "SELECT id FROM {$tbl_stock} WHERE item_id = %d AND location_id = %s",
+        $item_id, $location_id
+    ));
+    
+    if ($stock_id) {
+        // UPDATE existing record
+        $result = $wpdb->query($wpdb->prepare(
+            "UPDATE {$tbl_stock} 
+             SET balance = balance + %f, 
+                 updated_at = %s,
+                 last_ref = %s
+             WHERE item_id = %d AND location_id = %s",
+            $qty_change, 
+            current_time('mysql'),
+            $ref_id,
+            $item_id, 
+            $location_id
+        ));
+        
+        if ($result === false) {
+            throw new Exception("Stock update error for item {$item_id}: " . $wpdb->last_error);
+        }
+        
+        // Get new balance for logging
+        $new_balance = $wpdb->get_var($wpdb->prepare(
+            "SELECT balance FROM {$tbl_stock} WHERE item_id = %d AND location_id = %s",
             $item_id, $location_id
         ));
-
-        if ($exists) {
-            $wpdb->query($wpdb->prepare(
-                "UPDATE {$tbl_stock} SET balance = balance + %f, updated_at = %s, last_ref = %s
-                 WHERE item_id = %d AND location_id = %s",
-                $qty_change, current_time('mysql'), $ref_id, $item_id, $location_id
-            ));
-        } else {
-            $wpdb->insert($tbl_stock, [
-                'item_id' => $item_id,
-                'location_id' => $location_id,
-                'balance' => $qty_change,
-                'updated_at' => current_time('mysql'),
-                'last_ref' => $ref_id
-            ]);
+        
+        error_log("✅ Stock updated: Item #{$item_id} @ {$location_id} | Change: {$qty_change} | New Balance: {$new_balance}");
+        
+    } else {
+        // INSERT new record (first occurrence)
+        $result = $wpdb->insert($tbl_stock, [
+            'item_id' => $item_id,
+            'wp_post_id' => $wp_post_id ?: 0,
+            'location_id' => $location_id,
+            'balance' => $qty_change,
+            'updated_at' => current_time('mysql'),
+            'last_ref' => $ref_id
+        ]);
+        
+        if ($result === false) {
+            throw new Exception("Stock insert error for item {$item_id}: " . $wpdb->last_error);
         }
+        
+        error_log("✅ Stock created: Item #{$item_id} @ {$location_id} | Initial Balance: {$qty_change}");
     }
-} else {
-    error_log("⏭️ SKIPPING PHYSICAL STOCK UPDATE (Edit Mode - Already reversed by silentVoid)");
 }
+
+// ========================================================================
+// 7b. EDIT MODE CONTEXT LOGGING
+// ========================================================================
+if ($is_edit_mode) {
+    error_log("╔══════════════════════════════════════════════════════════");
+    error_log("║ EDIT MODE TRANSACTION SUMMARY");
+    error_log("╠══════════════════════════════════════════════════════════");
+    error_log("║ Old Ref ID: {$old_ref_id} → Status: VOIDED");
+    error_log("║ New Ref ID: {$ref_id} → Status: PENDING");
+    error_log("║ Stock Flow:");
+    error_log("║   1. silentVoid() reversed old transaction stock");
+    error_log("║   2. New checkout applied fresh stock movements");
+    error_log("║   3. Net result: Stock reflects NEW transaction quantities");
+    error_log("╚══════════════════════════════════════════════════════════");
+}
+
 
 
     // ========================================================================
