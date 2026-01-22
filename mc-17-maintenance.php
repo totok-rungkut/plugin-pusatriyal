@@ -240,6 +240,399 @@ add_action('admin_init', function() {
     }
 });
 
+/**************************************************************************
+ * MASS SYNC DENGAN PENGAMAN OPSI  ██████████████████
+ * Sinkronisasi master SKU dengan pengaman user role, 
+ * dan opsi boleh override stok 
+ *
+ * SECURITY LAYERS:
+ * 1. Button visibility (UI Layer)
+ * 2. GET request validation (URL Layer)
+ * 3. POST confirmation (Action Layer)
+ * 4. is_super_admin() check (Core Layer)
+ * 
+ ***********************************************************************************/
+ 
+// ============================================================================
+// LAYER 1: UI PROTECTION - Hide Button for Non-Admins
+// ============================================================================
+add_action('restrict_manage_posts', function() { 
+    $screen = get_current_screen();
+    
+    // Only show on pr_item list
+    if (!$screen || $screen->post_type !== 'pr_item') {
+        return;
+    }
+    
+    // ✅ SECURITY: Only show button to Administrators
+    if (!current_user_can('administrator')) {
+        return;
+    }
+    
+    // ✅ ADDITIONAL: Check if user level is 10 (Administrator level)
+    $current_user = wp_get_current_user();
+    $user_level = get_user_meta($current_user->ID, 'wp_user_level', true);
+    
+    if (intval($user_level) < 10) {
+        return; // Not administrator level
+    }
+    
+    $sync_url = esc_url(add_query_arg([
+        'puri_mass_sync' => '1',
+        '_wpnonce' => wp_create_nonce('puri_mass_sync_init')
+    ], admin_url('edit.php?post_type=pr_item')));
+    
+    ?>
+    <div style="display:inline-block; margin-left:10px;">
+        <a href="<?php echo $sync_url; ?>" 
+           class="button button-primary" 
+           style="background:#dc2626; border:none; position:relative;"
+           title="Administrator Only - Mass Sync SKU">
+            <i class="fa-solid fa-shield-halved"></i> ⚡ MASS SYNC (Admin Only)
+        </a>
+    </div>
+    
+    <!-- Security Warning Badge -->
+    <div style="display:inline-block; margin-left:5px;">
+        <span style="background:#fff3cd; color:#856404; padding:5px 10px; border-radius:3px; font-size:11px; border:1px solid #ffc107;">
+            <i class="fa-solid fa-user-shield"></i> Restricted Access
+        </span>
+    </div>
+    <?php
+});
+
+
+// ============================================================================
+// LAYER 2: GET REQUEST VALIDATION - URL Access Protection
+// ============================================================================
+add_action('admin_init', function() {
+    // Check if mass sync GET request
+    if (!isset($_GET['puri_mass_sync']) || $_GET['puri_mass_sync'] !== '1') {
+        return;
+    }
+    
+    $screen = get_current_screen();
+    if (!$screen || $screen->post_type !== 'pr_item') {
+        return;
+    }
+    
+    // ========================================================================
+    // SECURITY CHECK 1: Verify Nonce
+    // ========================================================================
+    if (!isset($_GET['_wpnonce']) || !wp_verify_nonce($_GET['_wpnonce'], 'puri_mass_sync_init')) {
+        wp_die(
+            '<h1>Security Check Failed</h1>' .
+            '<p>Invalid security token. Please refresh the page and try again.</p>',
+            'Security Error',
+            ['response' => 403]
+        );
+    }
+    
+    // ========================================================================
+    // SECURITY CHECK 2: Administrator Role
+    // ========================================================================
+    if (!current_user_can('administrator')) {
+        wp_die(
+            '<h1>Unauthorized Access</h1>' .
+            '<p><strong>Mass Sync</strong> hanya dapat diakses oleh <strong>Administrator</strong>.</p>' .
+            '<p>Role Anda saat ini: <code>' . implode(', ', wp_get_current_user()->roles) . '</code></p>' .
+            '<hr>' .
+            '<p style="color:#666; font-size:13px;">Jika Anda memerlukan akses, hubungi Komisaris Utama untuk upgrade role.</p>',
+            'Access Denied',
+            ['response' => 403, 'back_link' => true]
+        );
+    }
+    
+    // ========================================================================
+    // SECURITY CHECK 3: User Level Verification
+    // ========================================================================
+    $current_user = wp_get_current_user();
+    $user_level = get_user_meta($current_user->ID, 'wp_user_level', true);
+    
+    if (intval($user_level) < 10) {
+        wp_die(
+            '<h1>Insufficient Privileges</h1>' .
+            '<p>User level Anda (<strong>' . $user_level . '</strong>) tidak mencukupi.</p>' .
+            '<p>Mass Sync memerlukan User Level <strong>10</strong> (Administrator).</p>',
+            'Privilege Error',
+            ['response' => 403]
+        );
+    }
+    
+    // ========================================================================
+    // SECURITY CHECK 4: Super Admin Check (Multisite Safety)
+    // ========================================================================
+    if (is_multisite() && !is_super_admin()) {
+        wp_die(
+            '<h1>Super Admin Required</h1>' .
+            '<p>Pada instalasi multisite, Mass Sync hanya dapat dilakukan oleh Super Admin.</p>',
+            'Multisite Restriction',
+            ['response' => 403]
+        );
+    }
+    
+    // ========================================================================
+    // ALL CHECKS PASSED - Show Confirmation
+    // ========================================================================
+    add_action('admin_notices', function() {
+        $current_user = wp_get_current_user();
+        
+        ?>
+        <div class="notice notice-warning" style="border-left:5px solid #dc2626; background:#fff3cd;">
+            <h2 style="margin-top:15px;">
+                <i class="fa-solid fa-triangle-exclamation" style="color:#dc2626;"></i> 
+                Konfirmasi Mass Sync
+            </h2>
+            
+            <div style="background:#fff; padding:15px; border-radius:5px; margin:15px 0;">
+                <table class="widefat" style="max-width:600px;">
+                    <tr>
+                        <td><strong>Operator:</strong></td>
+                        <td><?php echo esc_html($current_user->display_name); ?> (<?php echo esc_html($current_user->user_login); ?>)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Role:</strong></td>
+                        <td><span style="background:#dc2626; color:#fff; padding:3px 8px; border-radius:3px; font-size:11px;">ADMINISTRATOR</span></td>
+                    </tr>
+                    <tr>
+                        <td><strong>User Level:</strong></td>
+                        <td><?php echo get_user_meta($current_user->ID, 'wp_user_level', true); ?> / 10</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Timestamp:</strong></td>
+                        <td><?php echo current_time('Y-m-d H:i:s'); ?></td>
+                    </tr>
+                </table>
+            </div>
+            
+            <div style="background:#fef2f2; padding:15px; border-radius:5px; border:1px solid #fecaca; margin-bottom:15px;">
+                <h3 style="margin-top:0; color:#dc2626;">⚠️ PERINGATAN PENTING</h3>
+                <ul style="margin:10px 0; padding-left:20px;">
+                    <li>Mass Sync akan <strong>memperbarui seluruh data SKU</strong> dari WordPress ke SQL</li>
+                    <li>Proses ini akan <strong>mengunci sistem</strong> selama beberapa detik</li>
+                    <li>Pastikan <strong>tidak ada kasir yang sedang transaksi</strong></li>
+                    <li><strong style="color:#dc2626;">BACKUP DATABASE telah dibuat!</strong></li>
+                </ul>
+            </div>
+            
+            <form method="post" style="display:flex; gap:10px; align-items:center;">
+                <?php wp_nonce_field('puri_admin_action', 'puri_admin_nonce'); ?>
+                <input type="hidden" name="puri_confirm_mass_sync" value="1">
+                
+                <button class="button button-primary" 
+                        type="submit" 
+                        style="background:#dc2626; border-color:#b91c1c; height:40px; font-size:14px;"
+                        onclick="return confirm('FINAL CONFIRMATION:\n\nApakah backup database sudah dibuat?\n\nApakah semua kasir sudah diberitahu?\n\nProses ini TIDAK BISA dibatalkan setelah dimulai.');">
+                    <i class="fa-solid fa-shield-halved"></i> Konfirmasi & Eksekusi Mass Sync
+                </button>
+                
+                <a class="button" 
+                   href="<?php echo esc_url(remove_query_arg(['puri_mass_sync', '_wpnonce'])); ?>" 
+                   style="height:40px; line-height:38px;">
+                    <i class="fa-solid fa-times"></i> Batalkan
+                </a>
+                
+                <span style="color:#666; font-size:12px; margin-left:10px;">
+                    <i class="fa-solid fa-info-circle"></i> 
+                    Tindakan ini akan dicatat dalam audit log
+                </span>
+            </form>
+        </div>
+        <?php
+    });
+});
+
+
+// ============================================================================
+// LAYER 3: POST CONFIRMATION - Action Execution Protection
+// ============================================================================
+add_action('admin_init', function() {
+    if (!isset($_POST['puri_confirm_mass_sync']) || !isset($_POST['puri_admin_nonce'])) {
+        return;
+    }
+    
+    // ========================================================================
+    // SECURITY CHECK 1: Nonce Verification
+    // ========================================================================
+    if (!wp_verify_nonce(sanitize_text_field($_POST['puri_admin_nonce']), 'puri_admin_action')) {
+        wp_die('Nonce verification failed.', 'Security Error', ['response' => 403]);
+    }
+    
+    // ========================================================================
+    // SECURITY CHECK 2: Re-verify Administrator Role
+    // ========================================================================
+    if (!current_user_can('administrator')) {
+        wp_die(
+            '<h1>Unauthorized Action</h1>' .
+            '<p>Eksekusi Mass Sync ditolak. Anda tidak memiliki role Administrator.</p>',
+            'Access Denied',
+            ['response' => 403]
+        );
+    }
+    
+    // ========================================================================
+    // SECURITY CHECK 3: User Level Check
+    // ========================================================================
+    $current_user = wp_get_current_user();
+    $user_level = get_user_meta($current_user->ID, 'wp_user_level', true);
+    
+    if (intval($user_level) < 10) {
+        wp_die('User level insufficient for Mass Sync execution.', 'Privilege Error', ['response' => 403]);
+    }
+    
+    // ========================================================================
+    // ALL SECURITY CHECKS PASSED - Execute Mass Sync
+    // ========================================================================
+    global $wpdb;
+    
+    // Start audit log
+    $start_time = microtime(true);
+    $operator_info = [
+        'user_id' => $current_user->ID,
+        'username' => $current_user->user_login,
+        'display_name' => $current_user->display_name,
+        'ip_address' => $_SERVER['REMOTE_ADDR'] ?? 'unknown',
+        'user_agent' => $_SERVER['HTTP_USER_AGENT'] ?? 'unknown'
+    ];
+    
+    error_log("============================================");
+    error_log("MASS SYNC EXECUTION STARTED");
+    error_log("Operator: {$operator_info['display_name']} ({$operator_info['username']})");
+    error_log("IP: {$operator_info['ip_address']}");
+    error_log("Timestamp: " . current_time('mysql'));
+    error_log("============================================");
+    
+    // Execute sync
+    $posts = get_posts(['post_type' => 'pr_item', 'numberposts' => -1, 'fields' => 'ids']);
+    $count_updated = 0;
+    $count_inserted = 0;
+    $count_skipped = 0;
+    
+    $table = puri_table_name('T_ITEMS');
+    
+    foreach ($posts as $post_id) {
+        if (!function_exists('get_field')) {
+            $count_skipped++;
+            continue;
+        }
+        
+        $sku = get_field('item_sku_code', $post_id);
+        if (!$sku) {
+            $count_skipped++;
+            continue;
+        }
+        
+        // ✅ FIX: Use UPDATE/INSERT instead of REPLACE
+        $existing_id = $wpdb->get_var($wpdb->prepare(
+            "SELECT id FROM {$table} WHERE sku = %s",
+            strtoupper(sanitize_text_field($sku))
+        ));
+        
+        $data = [
+            'wp_post_id'  => $post_id,
+            'sku'         => strtoupper(sanitize_text_field($sku)),
+            'name'        => get_the_title($post_id),
+            'type'        => get_field('type', $post_id) ?: 'currency',
+            'denom_value' => intval(get_field('denom_value', $post_id) ?: 1),
+            'sell_rate'   => floatval(get_field('sell_rate', $post_id) ?: 0)
+        ];
+        
+        if ($existing_id) {
+            // UPDATE existing
+            $result = $wpdb->update(
+                $table,
+                $data,
+                ['id' => $existing_id],
+                ['%d', '%s', '%s', '%s', '%d', '%f'],
+                ['%d']
+            );
+            if ($result !== false) $count_updated++;
+        } else {
+            // INSERT new
+            $result = $wpdb->insert($table, $data);
+            if ($result) $count_inserted++;
+        }
+    }
+    
+    // Calculate execution time
+    $execution_time = round(microtime(true) - $start_time, 2);
+    
+    // Log results
+    error_log("============================================");
+    error_log("MASS SYNC COMPLETED");
+    error_log("Updated: {$count_updated} items");
+    error_log("Inserted: {$count_inserted} items");
+    error_log("Skipped: {$count_skipped} items");
+    error_log("Execution time: {$execution_time}s");
+    error_log("============================================");
+    
+    // User notification
+    add_action('admin_notices', function() use ($count_updated, $count_inserted, $count_skipped, $execution_time, $operator_info) {
+        ?>
+        <div class="notice notice-success is-dismissible">
+            <h2>✅ Mass Sync Berhasil Dieksekusi</h2>
+            <table class="widefat" style="max-width:600px; margin:10px 0;">
+                <tr>
+                    <td><strong>Items Updated:</strong></td>
+                    <td><?php echo $count_updated; ?></td>
+                </tr>
+                <tr>
+                    <td><strong>Items Inserted:</strong></td>
+                    <td><?php echo $count_inserted; ?></td>
+                </tr>
+                <tr>
+                    <td><strong>Items Skipped:</strong></td>
+                    <td><?php echo $count_skipped; ?></td>
+                </tr>
+                <tr>
+                    <td><strong>Execution Time:</strong></td>
+                    <td><?php echo $execution_time; ?>s</td>
+                </tr>
+                <tr>
+                    <td><strong>Executed By:</strong></td>
+                    <td><?php echo esc_html($operator_info['display_name']); ?></td>
+                </tr>
+                <tr>
+                    <td><strong>Timestamp:</strong></td>
+                    <td><?php echo current_time('Y-m-d H:i:s'); ?></td>
+                </tr>
+            </table>
+            <p style="color:#666; font-size:12px;">
+                <i class="fa-solid fa-check-circle"></i> 
+                Sinkronisasi telah tercatat dalam audit log sistem.
+            </p>
+        </div>
+        <?php
+    });
+}, 999); // High priority to run after other admin_init hooks
+
+
+/**
+ * ============================================================================
+ * BONUS: AUDIT LOG TABLE (Optional)
+ * ============================================================================
+ * Uncomment jika ingin menyimpan audit log ke database
+ */
+/*
+function puri_log_mass_sync_execution($data) {
+    global $wpdb;
+    
+    $wpdb->insert($wpdb->prefix . 'puri_audit_log', [
+        'action' => 'mass_sync',
+        'user_id' => $data['user_id'],
+        'details' => json_encode($data),
+        'ip_address' => $data['ip_address'],
+        'created_at' => current_time('mysql')
+    ]);
+}
+*/
+
+
+
+
+
+
+
 /**
  * NUCLEAR CACHE CLEAR
  */

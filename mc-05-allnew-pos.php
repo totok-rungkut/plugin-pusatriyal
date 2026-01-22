@@ -6,7 +6,7 @@
  * 
  * @package     Puri_Money_Changer
  * @subpackage  Cockpit_POS
- * @version     7.9.0 (UX Restructured - Pool Transaction Phase 1)
+ * @version     7.9.2 (UX Restructured - Pool Transaction Phase 1)
  * @author      Denmas Totok (Architecture & Core Logic)
  * @refactor    Gemini AI Assistant (Code Optimization)
  * @since       2024-01-14
@@ -828,18 +828,43 @@ $items = $wpdb->get_results($wpdb->prepare("
                             </div>
                             <div class="panel-body table-scroll">
                                 <table class="wp-list-table widefat striped dense" id="stock_table">
-                                    <thead>
-                                        <tr class="sortable-header">
-                                            <th data-sort="name">Item <i class="fa-solid fa-sort"></i></th>
-                                            <th class="tr" data-sort="qty_start" style="background:#f0f0f1; border-left:2px solid #ccc;">Opening</th>
-                                            <th class="tr text-red" data-sort="qty_out">Out</th>
-                                            <th class="tr text-green" data-sort="qty_in">In</th>
-                                            <th class="tr" data-sort="qty_end" style="background:#e6f7ff; font-weight:bold;">Closing</th>
-                                            <th class="tr text-red" data-sort="sar_out" style="border-left:2px solid #ccc;">SAR Out</th>
-                                            <th class="tr text-green" data-sort="sar_in">SAR In</th>
-                                            <th class="tr" data-sort="sar_end" style="background:#e6f7ff; font-weight:bold;">SAR Balance</th>
-                                        </tr>
-                                    </thead>
+<thead>
+    <tr class="sortable-header">
+        <!-- Column 1: Item -->
+        <th data-sort="name" style="min-width:120px; text-align:left;">
+            <i class="fa-solid fa-tag"></i> Item
+        </th>
+        
+        <!-- Columns 2-5: Quantity Movement (PCS) -->
+        <th class="tr" data-sort="qty_start" style="background:#f9fafb; border-left:3px solid #cbd5e1; width:90px;">
+            Opening<br>
+            <small style="font-weight:normal; color:#64748b; font-size:9px;">(pcs)</small>
+        </th>
+        <th class="tr" data-sort="qty_out" style="color:#dc2626; width:90px;">
+            Out<br>
+            <small style="font-weight:normal; color:#64748b; font-size:9px;">(pcs)</small>
+        </th>
+        <th class="tr" data-sort="qty_in" style="color:#16a34a; width:90px;">
+            In<br>
+            <small style="font-weight:normal; color:#64748b; font-size:9px;">(pcs)</small>
+        </th>
+        <th class="tr" data-sort="qty_end" style="background:#dbeafe; font-weight:bold; width:100px;">
+            Balance<br>
+            <small style="font-weight:normal; color:#1e3a8a; font-size:9px;">(pcs)</small>
+        </th>
+        
+        <!-- Columns 6-8: SAR Valuation -->
+        <th class="tr" data-sort="sar_out" style="background:#fef2f2; border-left:3px solid #cbd5e1; color:#dc2626; width:110px;">
+            SAR Out
+        </th>
+        <th class="tr" data-sort="sar_in" style="background:#f0fdf4; color:#16a34a; width:110px;">
+            SAR In
+        </th>
+        <th class="tr" data-sort="sar_end" style="background:#dbeafe; font-weight:bold; color:#1e3a8a; width:120px;">
+            SAR Balance
+        </th>
+    </tr>
+</thead>
                                     <tbody></tbody>
                                 </table>
                             </div>
@@ -946,19 +971,46 @@ $items = $wpdb->get_results($wpdb->prepare("
 		/* ============================================ */
 		/* LAYOUT STRUCTURE                           */
 		/* ============================================ */
-		.flex-row { display: flex; gap: 15px; width: 100%; flex-wrap: wrap; }
-		.flex-col { display: flex; flex-direction: column; gap: 15px; }
-		.top-row .col-customer { flex: 1; min-width: 300px; }
-		.top-row .col-transaction { flex: 1; min-width: 350px; }
-		.top-row .col-cart { flex: 1; min-width: 400px; }
-		.bottom-row .col-history { flex: 3; min-width: 300px; }
-		.bottom-row .col-stock { flex: 7; min-width: 500px; }
+:root { --gap: 15px; }
+
+.col-stock {border-radius:5px;}
+.flex-row { display:flex; gap:var(--gap); width:100%; flex-wrap:nowrap; }
+.flex-col { display:flex; flex-direction:column; gap:var(--gap); }
+
+.top-row .col-customer    { flex:1 1 300px; }
+.top-row .col-transaction { flex:1 1 350px; }
+.top-row .col-cart        { flex:1 1 400px; }
+
+.bottom-row { display:flex; gap:var(--gap); }
+.bottom-row .col-history { flex:0 0 calc((100% - var(--gap)) * 0.45); min-width:300px; }
+.bottom-row .col-stock   { flex:0 0 calc((100% - var(--gap)) * 0.55); min-width:500px; }
+
+
+@media (max-width:1366px){ :root { --gap:20px; }
+    .flex-row { padding:0 10px; }
+}
+
+@media (max-width:1024px){ .flex-row, .bottom-row { flex-direction:column; }
+    .bottom-row .col-history, .bottom-row .col-stock { flex:1 1 100%; min-width:100%; }
+}
+
+#panelInputTransaksi.mode-buy #inp_rate{background:linear-gradient(180deg, #fff1ea03 0%, #ffd8ca66 100%) !important;border-color:#f59e0b!important;color:#92400e!important;font-weight:bold!important;}
+#panelInputTransaksi.mode-buy #inp_rate::placeholder{color:#d97706;font-style:italic;}
+#panelInputTransaksi.mode-buy .rate-info::before{content:"⚠️ Input manual: ";color:#f59e0b;font-weight:bold;}
+
+
+/* ASCII AT DIVIDER */
+.divider {display: flex;align-items: center; justify-content:center; margin:10px 0; font-family: monospace; white-space: nowrap;}
+.divider span {padding: 0 10px;}
+.divider::before, .divider::after {content: "────────────────────────────────"; overflow: hidden;}
+.divider.ascii::before { content: "───────────────────┤"; }
+.divider.ascii::after  { content: "├───────────────────"; }
 
 		/* ============================================ */
 		/* PANEL COMPONENTS                           */
 		/* ============================================ */
-		.panel { background: #fff; border: 1px solid #c3c4c7; box-shadow: 0 1px 2px rgba(0,0,0,.05); border-radius: 6px; display: flex; flex-direction: column; height: 100%; }
-		.panel-header { background: #f6f7f7; padding: 10px 15px; font-weight: 600; border-bottom: 1px solid #c3c4c7; font-size: 13px; display: flex; justify-content: space-between; align-items: center; color: #1d2327; }
+		.panel { background: #fff; border: 1px solid #c3c4c7; box-shadow: 0 1px 2px rgba(0,0,0,.05); border-radius: 10px; display: flex; flex-direction: column; height: 100%; }
+		.panel-header { background: #f6f7f7; padding: 10px 15px; font-weight: 600; border-bottom: 1px solid #c3c4c7; font-size: 13px; display: flex; justify-content: space-between; border-radius:10px 10px 0 0; align-items: center; color: #1d2327; }
 		.panel-body { padding: 15px; flex-grow: 1; }
 		.panel-footer { border-top: 1px solid #ddd; background: #fafafa; }
 
@@ -1055,8 +1107,8 @@ tr.status-void { background: #fef2f2; opacity: 0.5; text-decoration: line-throug
 
 </style>
 
+<div class="divider ascii"><span>ES6 ARSITEKTUR</span></div>
 
-// ─────────────────────────────────────────────────────────────────┤ ES6 ARSITEKTUR ├──────────────────
 <script>
 jQuery($ => {
 
@@ -1120,6 +1172,7 @@ bindEvents() {
     $('input[name="trade_mode"]').on('change', e => {
         this.tradeMode = e.target.value;
         this.applyModeGuard();
+		this.applyRateLockPolicy();
     });
 
     // Customer Dropdown Events
@@ -1395,18 +1448,45 @@ selectItem() {
     $('#base_rate_hidden').val(U.num(o.data('rate')));
     $('#current_stock').val(U.num(o.data('stock')));
     
+    // ✅ Set default rate from item
     this.$rate.val(U.num(o.data('rate')));
+    
+    // Clear calculated fields
     this.$qty.val('');
     this.$riyal.val('');
     this.$idr.val('Rp 0');
 
-    // ✅ FIX: Re-apply rate lock based on customer type
-    this.applyRateLockPolicy();  // ← TAMBAH INI
+    // ✅ Re-apply rate lock based on current mode & customer
+    this.applyRateLockPolicy();
     this.checkStockLock();
 }
 
+
 // ✅ NEW METHOD: Centralized Rate Lock Policy
+/**
+ * ============================================================================
+ * RATE LOCK POLICY - UPDATED FOR BUY MODE
+ * ============================================================================
+ * Rules:
+ * - SELL Mode: Rate locked to base price (from T_ITEMS.sell_rate)
+ * - BUY Mode: Rate unlocked for negotiation (kasir inputs custom rate)
+ * - Exception: Privileged customers (agent/bank/member) can always edit rate
+ * ============================================================================
+ */
 applyRateLockPolicy() {
+    // ====================================================================
+    // RULE 1: BUY MODE - ALWAYS UNLOCK (highest priority)
+    // ====================================================================
+    if (this.tradeMode === 'buy') {
+        this.$rate.prop('readonly', false).removeClass('bg-gray');
+        this.$rate.attr('placeholder', 'Input harga beli (negosiasi)');
+        console.log('💰 BUY MODE: Rate UNLOCKED for negotiation');
+        return; // Exit early, BUY mode overrides all other rules
+    }
+
+    // ====================================================================
+    // RULE 2: SELL MODE - Check customer privileges
+    // ====================================================================
     if (!this.currentCustomer) {
         // No customer selected → lock by default
         this.$rate.prop('readonly', true).addClass('bg-gray');
@@ -1414,22 +1494,21 @@ applyRateLockPolicy() {
         return;
     }
 
-    // Check customer type
+    // Check customer type for privileged access
     const privilegedTypes = ['agent', 'bank', 'moneychanger', 'member'];
     
     if (privilegedTypes.includes(this.currentCustomer.type)) {
-        // UNLOCK for privileged customers
+        // UNLOCK for privileged customers (can get custom rates)
         this.$rate.prop('readonly', false).removeClass('bg-gray');
         this.$rate.attr('placeholder', `Custom rate for ${this.currentCustomer.type}`);
         console.log(`✅ Rate UNLOCKED for customer type: ${this.currentCustomer.type}`);
     } else {
-        // LOCK for 'umum' and others
+        // LOCK for 'umum' and other regular customers
         this.$rate.prop('readonly', true).addClass('bg-gray');
         this.$rate.attr('placeholder', 'Fixed rate (umum)');
         console.log(`🔒 Rate LOCKED for customer type: ${this.currentCustomer.type}`);
     }
 }
-
 
 
   syncFromQty() {
@@ -2114,29 +2193,102 @@ loadStockAndHistory() {
     });
 }
 renderStockTable() {
-    // 1. Update Tabel Stock Card (Bagian Bawah)
-    const html = this.stockData.map(s => `
-      <tr>
-        <td><strong>${s.name}</strong></td>
-        <td class="tr">${U.fmt(s.qty_end)}</td>
-        <td class="tr">${U.fmt(s.sar_end)}</td>
-      </tr>`).join('');
+    // ========================================================================
+    // Validation: Check if data exists
+    // ========================================================================
+    if (!this.stockData || this.stockData.length === 0) {
+        $('#stock_table tbody').html(`
+            <tr>
+                <td colspan="8" align="center" style="padding:40px; color:#94a3b8;">
+                    <i class="fa-solid fa-box-open" style="font-size:48px; opacity:0.3; display:block; margin-bottom:15px;"></i>
+                    <strong>No stock data available</strong>
+                    <br><small>Transaksi belum ada bulan ini</small>
+                </td>
+            </tr>
+        `);
+        return;
+    }
+
+    // ========================================================================
+    // Render Table Rows (8 Columns)
+    // ========================================================================
+    const html = this.stockData.map(s => {
+        // Parse values with fallback to 0
+        const qtyStart = parseFloat(s.qty_start || 0);
+        const qtyOut   = parseFloat(s.qty_out || 0);
+        const qtyIn    = parseFloat(s.qty_in || 0);
+        const qtyEnd   = parseFloat(s.qty_end || 0);
+        const sarOut   = parseFloat(s.sar_out || 0);
+        const sarIn    = parseFloat(s.sar_in || 0);
+        const sarEnd   = parseFloat(s.sar_end || 0);
+
+        return `
+        <tr data-item-id="${s.id || ''}" data-sku="${s.sku || ''}">
+            <!-- Column 1: Item Name & SKU -->
+            <td style="font-weight:600; padding-left:12px;">
+                ${s.name || 'Unknown Item'}
+                <small style="display:block; color:#64748b; font-weight:normal; margin-top:2px;">
+                    ${s.sku || '-'}
+                </small>
+            </td>
+            
+            <!-- Columns 2-5: Quantity Movement -->
+            <td class="tr" style="background:#f9fafb;">${U.fmt(qtyStart)}</td>
+            <td class="tr" style="color:#dc2626; font-weight:500;">${U.fmt(qtyOut)}</td>
+            <td class="tr" style="color:#16a34a; font-weight:500;">${U.fmt(qtyIn)}</td>
+            <td class="tr" style="background:#dbeafe; font-weight:bold; color:#1e3a8a;">${U.fmt(qtyEnd)}</td>
+            
+            <!-- Columns 6-8: SAR Valuation -->
+            <td class="tr" style="background:#fef2f2; color:#dc2626; font-weight:500; border-left:1px solid #e2e8f0;">
+                ${U.fmt(sarOut)}
+            </td>
+            <td class="tr" style="background:#f0fdf4; color:#16a34a; font-weight:500;">
+                ${U.fmt(sarIn)}
+            </td>
+            <td class="tr" style="background:#dbeafe; font-weight:bold; color:#1e3a8a; font-size:13px;">
+                ${U.fmt(sarEnd)}
+            </td>
+        </tr>
+        `;
+    }).join('');
+
     $('#stock_table tbody').html(html);
 
-    // 2. PATCH: Update Dropdown Item (Select2) agar sinkron dengan stok terbaru
+    // ========================================================================
+    // Calculate & Render Footer Totals
+    // ========================================================================
+    let totalSarOut = 0;
+    let totalSarIn = 0;
+    let totalSarEnd = 0;
+
     this.stockData.forEach(s => {
-        // Cari option yang memiliki SKU yang sama
-        const $opt = this.$item.find(`option[data-sku="${s.sku}"]`);
-        if ($opt.length) {
-            // Update atribut data-stock dan label teksnya
-            $opt.attr('data-stock', s.qty_end);
-        }
+        totalSarOut += parseFloat(s.sar_out || 0);
+        totalSarIn += parseFloat(s.sar_in || 0);
+        totalSarEnd += parseFloat(s.sar_end || 0);
     });
 
-    // Beritahu Select2 bahwa data telah berubah secara internal
-    this.$item.trigger('change.select2'); 
-  }
-  
+    const footerHtml = `
+        <tr style="background:#f1f5f9; font-weight:bold; border-top:3px solid #94a3b8;">
+            <td colspan="5" style="text-align:right; padding-right:15px; color:#475569; font-size:13px;">
+                <i class="fa-solid fa-calculator"></i> TOTAL VALUATION:
+            </td>
+            <td class="tr" style="color:#dc2626; font-size:13px;">${U.fmt(totalSarOut)}</td>
+            <td class="tr" style="color:#16a34a; font-size:13px;">${U.fmt(totalSarIn)}</td>
+            <td class="tr" style="color:#1e3a8a; font-size:15px; font-weight:900;">
+                ${U.fmt(totalSarEnd)}
+            </td>
+        </tr>
+    `;
+
+    // Ensure tfoot exists
+    if ($('#stock_table tfoot').length === 0) {
+        $('#stock_table').append('<tfoot></tfoot>');
+    }
+    $('#stock_table tfoot').html(footerHtml);
+
+    console.log('✅ Stock card rendered: 8 columns, ' + this.stockData.length + ' items');
+}
+
   
   /* ---------------- CHECKOUT (Sinkron Mozart) ---------------- */
 handleCheckout() {
