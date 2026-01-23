@@ -35,6 +35,9 @@ global $wpdb;
 class Puri_Cockpit_POS {
 
     public function __construct() {
+		// Register hooks -  Invoice / Receipt
+		$this->load_invoice_module(); 
+
         // Menu registration handled by MC-00 master controller
         add_action('admin_enqueue_scripts', [$this, 'enqueue_assets']);
         
@@ -52,10 +55,6 @@ class Puri_Cockpit_POS {
         add_action('wp_ajax_puri_pos_create_customer', [$this, 'ajax_create_customer']);
 		add_action('wp_ajax_puri_pos_upload_customer_id', [$this, 'ajax_upload_customer_id']);
 		
-		// Register hooks -  Invoice / Receipt
-		// Load modular components
-		$this->load_invoice_module(); 
-		add_action('admin_enqueue_scripts', [$this, 'enqueue_assets']);
 
     // ✅ ADD DEBUG LOG
     error_log('🔍 Invoice module loaded: ' . (function_exists('puri_pos_render_invoice_modal') ? 'YES' : 'NO'));
@@ -445,21 +444,45 @@ public function get_pool_history() {
      * Enqueue CSS/JS Assets
      * Loads external libraries if not already present
      */
-    public function enqueue_assets($hook) {
-        // SweetAlert2 for modal dialogs
-        if(!wp_script_is('sweetalert2', 'enqueued')) {
-            wp_enqueue_script('sweetalert2', 'https://cdn.jsdelivr.net/npm/sweetalert2@11', [], null, true);
-        }
-        
-        // Select2 for enhanced dropdowns
-        if(!wp_script_is('select2', 'enqueued')) {
-            wp_enqueue_style('select2', 'https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css');
-            wp_enqueue_script('select2', 'https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js', ['jquery'], null, true);
-        }
-        
-        // Font Awesome icons
-        wp_enqueue_style('fontawesome', 'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css');
+public function enqueue_assets($hook) {
+
+    // =====================================================
+    // GLOBAL ASSETS (boleh di semua halaman plugin)
+    // =====================================================
+
+    if(!wp_script_is('sweetalert2', 'enqueued')) {
+        wp_enqueue_script('sweetalert2', 'https://cdn.jsdelivr.net/npm/sweetalert2@11', [], null, true);
     }
+
+    if(!wp_script_is('select2', 'enqueued')) {
+        wp_enqueue_style('select2', 'https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css');
+        wp_enqueue_script('select2', 'https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js', ['jquery'], null, true);
+    }
+
+    wp_enqueue_style('fontawesome', 'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css');
+
+
+    // =====================================================
+    // 🎯 KHUSUS HALAMAN COCKPIT POS SAJA
+    // =====================================================
+    if ($hook !== 'puri-sales_page_puri-cockpit-pos') {
+        return;
+    }
+
+    // ===== KWITANSI PRINT SYSTEM =====
+    wp_enqueue_script(
+        'puri-kwitansi-js',
+        plugin_dir_url(__FILE__) . '../assets/js/kwitansi.js',
+        [],
+        '1.0',
+        true
+    );
+
+    // Kirim path CSS ke JS
+    wp_localize_script('puri-kwitansi-js', 'PURI_KWITANSI_CONFIG', [
+        'cssUrl' => plugin_dir_url(__FILE__) . '../assets/css/kwitansi.css'
+    ]);
+}
 
 
 public function ajax_upload_customer_id() {
@@ -538,7 +561,7 @@ public function ajax_upload_customer_id() {
         <div class="wrap puri-cockpit-wrapper">
             <h1 class="wp-heading-inline">
                 <i class="fa-solid fa-gauge-high"></i> Cockpit P.O.S 
-                <span class="version-badge">v6.10.25</span>
+                <span class="version-badge">v7.0.5</span>
             </h1>
             <hr class="wp-header-end">
 
@@ -1116,7 +1139,7 @@ $items = $wpdb->get_results($wpdb->prepare("
 		/* MODAL STYLES                               */
 		/* ============================================ */
 		.puri-modal { position: fixed; z-index: 99999; inset: 0; background-color: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; }
-		.puri-modal-content { background-color: #fff; border-radius: 8px; width: 90%; max-width: 600px; max-height: 
+		.puri-modal-content { background-color: #fff; border-radius: 8px; width: 90%; max-width: 600px; max-height: 98%; overflow-y: auto;}
 
 /* --------------- Status Row Styling -------------*/
 tr.status-pending { background: #fffbeb; }
@@ -1125,6 +1148,7 @@ tr.status-posted { background: #f0fdf4; opacity: 0.7; }
 tr.status-void { background: #fef2f2; opacity: 0.5; text-decoration: line-through; }
 
 /* --------------- Badge Styling -----------------*/
+
 .badge {
     display: inline-block;
     padding: 2px 8px;
@@ -1250,6 +1274,20 @@ bindEvents() {
 		console.log('🖱️ Void Button Clicked, ref_id:', refId);
 		this.confirmVoid(refId);
 	});
+
+
+// ✅ FIX: Print Invoice Button (Event Delegation)
+jQuery(document).on('click', '.btn-print-invoice', function (e) {
+    e.preventDefault();
+
+    const refId = jQuery(this).data('ref-id');
+
+    const printUrl = ajaxurl + '?action=puri_pos_print_invoice&ref_id=' + refId;
+
+    window.open(printUrl, '_blank'); // 🔥 buka halaman print asli
+});
+
+
 
     // Clear Form Button
     $('#btn_clear_form').on('click', () => {
@@ -1770,18 +1808,29 @@ confirmVoid(refId) {
 }
 
 // ✅ Silent void (untuk edit flow)
+/**
+ * ============================================================================
+ * SILENT VOID - Promise-based Transaction Cancellation
+ * ============================================================================
+ * Cancels old transaction without showing alerts (for edit flow)
+ * Returns Promise for proper async handling
+ * ============================================================================
+ */
+
 silentVoid(refId) {
     return new Promise((resolve, reject) => {
+        // Gunakan U.ajax agar konsisten dengan method lain
         U.ajax({
             data: { 
                 action: 'puri_pos_void_pool_transaction', 
                 ref_id: refId,
+                silent_mode: '1', // <--- PENTING: Jangan lupakan ini (ada di Opsi 1)
                 nonce: '<?php echo wp_create_nonce("puri_pos_checkout"); ?>'
             },
             success: (r) => {
                 if (r.success) {
                     console.log('✅ Silent void success:', refId);
-                    resolve(r);
+                    resolve(r.data);
                 } else {
                     console.error('❌ Silent void failed:', r.data);
                     reject(r.data);
@@ -1998,43 +2047,6 @@ editFromPool(refId) {
     });
 }
 
-/**
- * ============================================================================
- * SILENT VOID - Promise-based Transaction Cancellation
- * ============================================================================
- * Cancels old transaction without showing alerts (for edit flow)
- * Returns Promise for proper async handling
- * ============================================================================
- */
-silentVoid(refId) {
-    return new Promise((resolve, reject) => {
-        console.log('🔇 Starting silent void for:', refId);
-        
-        $.ajax({
-            url: ajaxurl,
-            type: 'POST',
-            data: { 
-                action: 'puri_pos_void_pool_transaction', 
-                ref_id: refId,
-                silent_mode: '1', // Flag to skip user notifications in backend
-                nonce: '<?php echo wp_create_nonce("puri_pos_checkout"); ?>'
-            },
-            success: (response) => {
-                if (response.success) {
-                    console.log('✅ Silent void successful:', refId);
-                    resolve(response.data);
-                } else {
-                    console.error('❌ Silent void failed:', response.data);
-                    reject(response.data || 'Void operation failed');
-                }
-            },
-            error: (xhr, status, error) => {
-                console.error('❌ Silent void AJAX error:', xhr.responseText);
-                reject(`Network error: ${error}`);
-            }
-        });
-    });
-}
 
 /**
  * ============================================================================
@@ -2418,26 +2430,6 @@ handleCheckout() {
 window.Cockpit = new CockpitPOS();
 
 });
-
-
-// =========================================================== tombol print ====
-// ✅ Event delegation harus di luar module (di document ready)
-// =============================================================================
-$(document).ready(function() {
-    $(document).on('click', '.btn-print-invoice', function(e) {
-        e.preventDefault();
-        const refId = $(this).data('ref-id');
-        console.log('🖨️ Print button clicked for:', refId);
-        
-        if (typeof POS_Invoice !== 'undefined') {
-            POS_Invoice.open(refId, false); // false = manual print
-        } else {
-            console.error('❌ POS_Invoice module not available');
-            Swal.fire('Error', 'Invoice system not loaded', 'error');
-        }
-    });
-});
-
 
 
 // activate font Lucide ------------------
