@@ -22,7 +22,7 @@ function puri_render_monitoring_page() {
     global $wpdb;
     // For admin UI we will check capability where needed
     $cash_position = $wpdb->get_var($wpdb->prepare("SELECT COALESCE(SUM(debit - credit),0) FROM " . puri_table_name('T_JOURNAL') . " WHERE account_code IN ('1101','1102')"));
-    $inventory_value = $wpdb->get_var("SELECT COALESCE(SUM(s.qty * i.base_price),0) FROM " . puri_table_name('T_STOCK') . " s JOIN " . puri_table_name('T_ITEMS') . " i ON s.item_id = i.id");
+    $inventory_value = $wpdb->get_var("SELECT COALESCE(SUM(s.balance * i.base_price),0) FROM " . puri_table_name('T_STOCK') . " s JOIN " . puri_table_name('T_ITEMS') . " i ON s.item_id = i.id");
     $today_sales = $wpdb->get_var($wpdb->prepare("SELECT COALESCE(SUM(credit - debit),0) FROM " . puri_table_name('T_JOURNAL') . " WHERE account_code = '4100' AND DATE(trx_date) = %s", current_time('Y-m-d')));
 
     ob_start();

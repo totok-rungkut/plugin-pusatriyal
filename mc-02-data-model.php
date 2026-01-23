@@ -37,7 +37,7 @@ add_action('manage_pr_item_posts_custom_column', function($column, $post_id) {
             break;
         case 'stock': 
             $qty = $wpdb->get_var($wpdb->prepare("
-				SELECT s.qty 
+				SELECT s.balance 
 				FROM ".puri_table_name('T_STOCK')." s
 				JOIN ".puri_table_name('T_ITEMS')." i ON s.item_id = i.id
 				WHERE i.wp_post_id = %d", $post_id));

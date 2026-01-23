@@ -591,10 +591,10 @@ function renderStockTable() {
                     html += `<tr>
                         <td><strong>${s.name}</strong><br><small style="color:#888">${s.sku}</small></td>
                         
-                        <td class="tr" style="${borderLeft} ${s.qty_start===0?clsZero:''}">${fmt(s.qty_start)}</td>
-                        <td class="tr text-red" style="${s.qty_out===0?clsZero:''}">${s.qty_out > 0 ? '-' + fmt(s.qty_out) : '0'}</td>
-                        <td class="tr text-green" style="${s.qty_in===0?clsZero:''}">${s.qty_in > 0 ? '+' + fmt(s.qty_in) : '0'}</td>
-                        <td class="tr" style="${bgEnd} ${s.qty_end===0?clsZero:'color:#000;'}">${fmt(s.qty_end)}</td>
+                        <td class="tr" style="${borderLeft} ${s.balance_start===0?clsZero:''}">${fmt(s.balance_start)}</td>
+                        <td class="tr text-red" style="${s.balance_out===0?clsZero:''}">${s.balance_out > 0 ? '-' + fmt(s.balance_out) : '0'}</td>
+                        <td class="tr text-green" style="${s.balance_in===0?clsZero:''}">${s.balance_in > 0 ? '+' + fmt(s.balance_in) : '0'}</td>
+                        <td class="tr" style="${bgEnd} ${s.balance_end===0?clsZero:'color:#000;'}">${fmt(s.balance_end)}</td>
                         
                         <td class="tr text-red" style="${borderLeft} ${s.sar_out===0?clsZero:''}">${fmt(s.sar_out)}</td>
                         <td class="tr text-green" style="${s.sar_in===0?clsZero:''}">${fmt(s.sar_in)}</td>
@@ -647,7 +647,7 @@ function renderStockTable() {
             $stock = 0;
             
             if ($sku && $tbl_items) {
-                $query = "SELECT (COALESCE(s.qty, 0) - COALESCE(l.qty_lock, 0)) as ready_stock, i.denom_value, i.sell_rate FROM {$tbl_items} i LEFT JOIN {$tbl_stock} s ON i.id = s.item_id AND s.location_id = 'laci_kasir' LEFT JOIN {$tbl_locks} l ON i.id = l.item_id WHERE i.sku = %s LIMIT 1";
+                $query = "SELECT (COALESCE(s.balance, 0) - COALESCE(l.qty_lock, 0)) as ready_stock, i.denom_value, i.sell_rate FROM {$tbl_items} i LEFT JOIN {$tbl_stock} s ON i.id = s.item_id AND s.location_id = 'laci_kasir' LEFT JOIN {$tbl_locks} l ON i.id = l.item_id WHERE i.sku = %s LIMIT 1";
                 $engine_data = $wpdb->get_row($wpdb->prepare($query, $sku));
                 if ($engine_data) {
                     $stock = $engine_data->ready_stock;
@@ -1063,7 +1063,7 @@ public function ajax_get_stock_summary() {
         // T_STOCK adalah kebenaran mutlak saldo SAAT INI (Ending Balance)
         $items = $wpdb->get_results("
             SELECT i.id, i.name, i.sku, i.type, i.denom_value, 
-                   s.qty as stock_phys, l.qty_lock 
+                   s.balance as stock_phys, l.qty_lock 
             FROM " . puri_table_name('T_ITEMS') . " i 
             LEFT JOIN " . puri_table_name('T_STOCK') . " s ON i.id = s.item_id AND s.location_id = 'laci_kasir' 
             LEFT JOIN " . puri_table_name('T_LOCKS') . " l ON i.id = l.item_id 

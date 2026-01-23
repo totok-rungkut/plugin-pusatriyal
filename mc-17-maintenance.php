@@ -129,6 +129,7 @@ add_action('restrict_manage_posts', function() {
         '_wpnonce' => wp_create_nonce('puri_mass_sync_init')
     ], admin_url('edit.php?post_type=pr_item')));
     ?>
+
     <a href="<?= $sync_url ?>" 
        class="button button-primary" 
        style="background:#dc2626; border:none; margin-left:10px;">
@@ -551,6 +552,8 @@ add_action('admin_init', function() {
     exit;
 });
 
+
+
 // ============================================================================
 // PART 4: HARD RESET SYSTEM
 // ============================================================================
@@ -773,6 +776,75 @@ function puri_render_maintenance_page() {
                     </div>
                     <?php endif; ?>
                 </div>
+
+
+<!-- CARD: Mass Sync Control -->
+<div class="puri-card">
+    <h2>⚡ Mass Sync SKU</h2>
+    
+    <div class="alert alert-info" style="background:#e0f2fe; border-left-color:#0ea5e9;">
+        <strong>ℹ️ What is Mass Sync?</strong>
+        <p>Synchronize ALL items from WordPress CPT to SQL table (T_ITEMS) in one batch operation.</p>
+    </div>
+    
+    <table class="widefat fixed striped">
+        <thead>
+            <tr>
+                <th style="width:30%;">Component</th>
+                <th style="width:70%;">Description</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><strong>Auto Sync</strong></td>
+                <td>
+                    <span class="badge badge-success">✅ ACTIVE</span>
+                    <p style="margin:5px 0 0 0; font-size:12px; color:#666;">
+                        Every time you save an item in WordPress, it automatically syncs to SQL
+                    </p>
+                </td>
+            </tr>
+            <tr>
+                <td><strong>Mass Sync</strong></td>
+                <td>
+                    <p style="margin:0 0 10px 0; font-size:13px;">
+                        Batch synchronize all <?php echo $status['wp_count']; ?> items at once
+                    </p>
+                    
+                    <?php
+                    $sync_url = esc_url(add_query_arg([
+                        'puri_mass_sync' => '1',
+                        '_wpnonce' => wp_create_nonce('puri_mass_sync_init')
+                    ], admin_url('edit.php?post_type=pr_item')));
+                    ?>
+                    
+                    <a href="<?php echo $sync_url; ?>" 
+                       class="button button-primary"
+                       style="background:#dc2626; border-color:#b91c1c; height:40px; line-height:38px; font-size:14px; font-weight:600;">
+                        <span class="dashicons dashicons-update" style="margin-top:8px;"></span>
+                        TRIGGER MASS SYNC
+                    </a>
+                </td>
+            </tr>
+        </tbody>
+    </table>
+    
+    <div style="margin-top:20px; padding:15px; background:#fef3c7; border:1px solid #fde68a; border-radius:5px;">
+        <h4 style="margin-top:0; color:#92400e;">⚠️ When to Use Mass Sync?</h4>
+        <ul style="margin:10px 0; padding-left:20px; font-size:13px; line-height:1.8;">
+            <li><strong>After bulk import</strong> - when you add many items via CSV/Excel</li>
+            <li><strong>After migration</strong> - when moving from old system to new</li>
+            <li><strong>Database mismatch</strong> - when WP count ≠ SQL count</li>
+            <li><strong>Missing metadata</strong> - when items have empty names/types in SQL</li>
+        </ul>
+    </div>
+</div>
+
+
+
+
+
+
                 
                 <!-- CARD: Database Reset -->
                 <div class="puri-card danger-zone">

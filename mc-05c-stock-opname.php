@@ -56,7 +56,7 @@ function puri_render_bulk_opname_page() {
     }
 
     $items = $wpdb->get_results($wpdb->prepare("
-        SELECT i.id, i.name, i.sku, i.type, i.denom_value, COALESCE(s.qty, 0) as system_qty
+        SELECT i.id, i.name, i.sku, i.type, i.denom_value, COALESCE(s.balance, 0) as system_qty
         FROM {$tbl_items} i
         LEFT JOIN {$tbl_stock} s ON i.id = s.item_id AND s.location_id = %s
         WHERE i.type IN ('currency', 'package')

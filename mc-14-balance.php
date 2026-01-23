@@ -27,7 +27,7 @@ function puri_render_balance_sheet_page() {
 
     // Inventory valuation based on stock qty * base_price
     $inventory_value = $wpdb->get_var("
-        SELECT COALESCE(SUM(s.qty * i.base_price),0)
+        SELECT COALESCE(SUM(s.balance * i.base_price),0)
         FROM " . puri_table_name('T_STOCK') . " s
         JOIN " . puri_table_name('T_ITEMS') . " i ON s.item_id = i.id
     ");
