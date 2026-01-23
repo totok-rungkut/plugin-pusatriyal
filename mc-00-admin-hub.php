@@ -59,6 +59,7 @@ add_action('admin_menu', function() {
 	add_submenu_page('puri-sales', 'Cockpit POS', 'Cockpit POS !', 'manage_options', 'puri-cockpit-pos', 'allnew_pos_render_page');
     add_submenu_page('puri-purchase', 'Konsinyasi', 'Konsinyasi', 'manage_options', 'puri-consignment', 'puri_render_consignment_page');
     add_submenu_page('puri-sales', 'Pelanggan', 'Pelanggan', 'manage_options', 'edit.php?post_type=pr_customer');
+    add_submenu_page('puri-setting', 'Master Item SKU', '◬ Produk & Jasa', 'manage_options', 'edit.php?post_type=pr_item');
     //add_submenu_page('puri-sales', 'Kasir POS', 'Kasir POS', 'manage_options', 'puri-pos', 'puri_render_pos_page');
     //add_submenu_page('puri-sales', 'Antrean / Estimasi', '▶ Estimasi', 'manage_options', 'puri-queue', 'puri_render_queue_page');
 
@@ -72,6 +73,51 @@ add_action('admin_menu', function() {
 	add_submenu_page('puri-accounting', 'Pemetaan akun General Ledger', '- Pemetaan akun GL', 'manage_options', 'puri-gl-mapping', 'puri_render_gl_mapping_page');
 //    add_submenu_page('puri-accounting', 'Rekonsiliasi', '◕ Rekonsiliasi', 'manage_options', 'puri-balance-sheet', 'puri_render_balance_sheet_page');
 //	add_submenu_page('puri-accounting','EOD Dashboard','EOD Processing','manage_options','puri-eod-dashboard','eod_dashboard_render_page');
+
+
+    // REPORTIN
+    add_menu_page('Laporan', 'Laporan', 'manage_options', 'puri-reporting', 'puri_landing_report', 'dashicons-analytics', 32);
+    add_submenu_page('puri-reporting', 'Mutasi Riyal', '◕ Mutasi Riyal', 'manage_options', 'puri-riyal-report', 'puri_render_riyal_mutation_report');
+    add_submenu_page('puri-reporting', 'Summary Transaksi Customer', '◕ Summary Cust', 'manage_options', 'puri-pivot-report', 'puri_render_pivot_report_page');
+    add_submenu_page('puri-reporting', 'Summary Transaksi Harian', '◕ Transaksi Harian', 'manage_options', 'puri-journal', 'puri_render_journal_page');
+    add_submenu_page('puri-reporting', 'Laba / Rugi', '◕ Laba / Rugi', 'manage_options', 'puri-pl-report', 'puri_render_pl_page');
+    add_submenu_page('puri-reporting', 'Neraca', '◕ Neraca', 'manage_options', 'puri-balance-sheet', 'puri_render_balance_sheet_page');
+	add_submenu_page('puri-reporting', 'Jurnal Stok', '◕ Jurnal Stok', 'manage_options', 'puri-inventory-ledger', 'puri_render_inventory_ledger_page');
+
+
+    // PERBANKAN
+    add_menu_page('Perbankan', 'Perbankan', 'manage_options', 'puri-banking', 'puri_render_profile_page', 'dashicons-bank', 33);
+    add_submenu_page('puri-banking', 'Akun Terhubung', '■ Integrasi Excel', 'manage_options', 'puri-webhook', 'puri_render_webhook_page');
+
+    // SETTING (non-transaksional)
+    add_menu_page('Setting', 'Setting/Master', 'manage_options', 'puri-setting', 'puri_render_maintenance_page', 'dashicons-admin-settings', 33);
+    add_submenu_page('puri-setting', 'Profile', '◬ Profile', 'manage_options', 'puri-profile', 'puri_render_profile_page');
+    add_submenu_page('puri-setting', 'Master Item SKU', '◬ Produk & Jasa', 'manage_options', 'edit.php?post_type=pr_item');
+    add_submenu_page('puri-setting', 'Mass Sync SKU', '◬ Mass Sync SKU', 'manage_options', 'puri-mass-sync', 'puri_render_mass_sync_page');
+
+
+
+
+
+    add_submenu_page(
+        'puri-setting', 
+        'Maintenance & Reset', 
+        '⚠️ Maintenance', 
+        'manage_options', 
+        'puri-maintenance', 
+        'puri_render_maintenance_page'
+    );
+	
+	    // NEW: User Manager submenu
+    add_submenu_page(
+        'puri-setting',
+        'User & Role Manager',
+        '👥 Users & Roles',
+        'manage_options',
+        'puri-user-manager',
+        'puri_render_user_manager_page'
+    );
+
 
 
 // --- PILAR 2: TRANSAKSI (Gaya Mozart v7) ---
@@ -104,8 +150,17 @@ add_submenu_page(
     'puri_render_reconciliation_page'  // Fungsi baru di MC-05C
 );
 
+add_submenu_page( 'puri-accounting', 'Master Item SKU', '📋 Produk & Jasa', 'read', 'edit.php?post_type=pr_item' );
 
-
+// Tambahkan ini di dalam add_action('admin_menu', function() { ... })
+// Di dalam bagian "SETTING (non-transaksional)"
+add_submenu_page(
+    'puri-setting', 
+    'User Management', 
+    '◬ Kelola User', 
+    'manage_options', 
+    'users.php' 
+);
 
 
 // TAMBAHKAN MENU BARU MC-05D (Investigation Tower)
@@ -121,26 +176,6 @@ add_submenu_page(
 
 
 
-    // REPORTIN
-    add_menu_page('Laporan', 'Laporan', 'manage_options', 'puri-reporting', 'puri_landing_report', 'dashicons-analytics', 32);
-    add_submenu_page('puri-reporting', 'Mutasi Riyal', '◕ Mutasi Riyal', 'manage_options', 'puri-riyal-report', 'puri_render_riyal_mutation_report');
-    add_submenu_page('puri-reporting', 'Summary Transaksi Customer', '◕ Summary Cust', 'manage_options', 'puri-pivot-report', 'puri_render_pivot_report_page');
-    add_submenu_page('puri-reporting', 'Summary Transaksi Harian', '◕ Transaksi Harian', 'manage_options', 'puri-journal', 'puri_render_journal_page');
-    add_submenu_page('puri-reporting', 'Laba / Rugi', '◕ Laba / Rugi', 'manage_options', 'puri-pl-report', 'puri_render_pl_page');
-    add_submenu_page('puri-reporting', 'Neraca', '◕ Neraca', 'manage_options', 'puri-balance-sheet', 'puri_render_balance_sheet_page');
-	add_submenu_page('puri-reporting', 'Jurnal Stok', '◕ Jurnal Stok', 'manage_options', 'puri-inventory-ledger', 'puri_render_inventory_ledger_page');
-
-
-    // PERBANKAN
-    add_menu_page('Perbankan', 'Perbankan', 'manage_options', 'puri-banking', 'puri_render_profile_page', 'dashicons-bank', 33);
-    add_submenu_page('puri-banking', 'Akun Terhubung', '■ Integrasi Excel', 'manage_options', 'puri-webhook', 'puri_render_webhook_page');
-
-    // SETTING (non-transaksional)
-    add_menu_page('Setting', 'Setting/Master', 'manage_options', 'puri-setting', 'puri_render_maintenance_page', 'dashicons-admin-settings', 33);
-    add_submenu_page('puri-setting', 'Profile', '◬ Profile', 'manage_options', 'puri-profile', 'puri_render_profile_page');
-    add_submenu_page('puri-setting', 'Master Item SKU', '◬ Produk & Jasa', 'manage_options', 'edit.php?post_type=pr_item');
-    add_submenu_page('puri-setting', 'Maintenance', '◬️ Maintenance', 'manage_options', 'puri-maintenance', 'puri_render_maintenance_page');
-    add_submenu_page('puri-setting', 'Mass Sync SKU', '◬ Mass Sync SKU', 'manage_options', 'puri-mass-sync', 'puri_render_mass_sync_page');
 
 
 
@@ -163,15 +198,57 @@ function puri_render_welcome_screen() {
     echo '</div></div>';
 }
 
-// --- MASS SYNC SKU (Logic dipertahankan dari v6.0.1) ---
-add_action('restrict_manage_posts', function() {
-    if (get_current_screen() && get_current_screen()->post_type === 'pr_item' && current_user_can('manage_options')) {
-        $sync_url = esc_url(add_query_arg(['puri_mass_sync' => '1'], admin_url('edit.php?post_type=pr_item')));
-        echo '<a href="' . $sync_url . '" class="button button-primary" style="background:#0f172a;border:none;margin-left:10px;">⚡ SINKRONISASI MASSAL KE SQL</a>';
+/**
+ * Integrity Status Checker
+ * Membandingkan jumlah CPT pr_item dengan jumlah baris di SQL T_ITEMS.
+ *
+ * @return array {
+ *   @type int  $wp_count   Jumlah CPT pr_item
+ *   @type int  $sql_count  Jumlah baris di T_ITEMS
+ *   @type bool $is_synced  True jika jumlah sama
+ * }
+ */
+
+function puri_get_integrity_status() {
+    global $wpdb;
+    $table_items = puri_table_name('T_ITEMS');
+
+    // Hitung jumlah CPT pr_item
+    $wp_count = (int) wp_count_posts('pr_item')->publish;
+
+    // Hitung jumlah baris di SQL
+    $sql_count = (int) $wpdb->get_var("SELECT COUNT(*) FROM {$table_items}");
+
+    return [
+        'wp_count'  => $wp_count,
+        'sql_count' => $sql_count,
+        'is_synced' => ($wp_count === $sql_count)
+    ];
+}
+
+add_action('plugins_loaded', function() {
+    $user_id = get_current_user_id();
+    if (!$user_id) return;
+
+    // Ambil meta custom
+    $riy_caps = get_user_meta($user_id, 'riy_capabilities', true);
+    $riy_caps = maybe_unserialize($riy_caps);
+
+    if ($riy_caps && !get_user_meta($user_id, $GLOBALS['wpdb']->prefix . 'capabilities', true)) {
+        update_user_meta($user_id, $GLOBALS['wpdb']->prefix . 'capabilities', $riy_caps);
+    }
+
+    $riy_level = get_user_meta($user_id, 'riy_user_level', true);
+    if ($riy_level && !get_user_meta($user_id, $GLOBALS['wpdb']->prefix . 'user_level', true)) {
+        update_user_meta($user_id, $GLOBALS['wpdb']->prefix . 'user_level', $riy_level);
     }
 });
 
 
+
+
+
+/*-------------------------------------------end hook maintenance-------------*/
 add_action('admin_init', function() {
     if (isset($_GET['puri_mass_sync']) && $_GET['puri_mass_sync'] === '1' && get_current_screen() && get_current_screen()->post_type === 'pr_item') {
         puri_check_cap('manage_options');

@@ -86,6 +86,7 @@ DEL X_HELPER.TXT 2>nul
 FOR %%F IN (
     mc-17-maintenance.php
     mc-19-crud-partnership.php
+    mc-00-user-control.php
     mc-23-coa-manager.php
     mc-28-gl-mapping.php
 ) DO (
@@ -129,7 +130,6 @@ goto :eof
 echo Preparing: X_OTHERS.TXT
 DEL X_OTHERS.TXT 2>nul
 FOR %%F IN (
-    mc-00-user-control.php
     mc-02-data-model.php
     mc-06-visitor-cockpit.php
     mc-07-queue-orders.php

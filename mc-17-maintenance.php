@@ -16,17 +16,21 @@
 
 defined('ABSPATH') || exit;
 
-add_action('admin_menu', function() {
+// ============================================================================
+// PART 1: MENU REGISTRATION
+// ============================================================================
+
+add_action('admin_menu', function () {
     add_submenu_page(
-        'puri-setting', 
-        'Maintenance & Reset', 
-        '⚠️ Maintenance', 
-        'manage_options', 
-        'puri-maintenance', 
+        'puri-setting',
+        'Maintenance & Reset',
+        '⚠️ Maintenance',
+        'manage_options',
+        'puri-maintenance',
         'puri_render_maintenance_page'
     );
-	
-	    // NEW: User Manager submenu
+
+    // NEW: User Manager submenu
     add_submenu_page(
         'puri-setting',
         'User & Role Manager',
@@ -35,352 +39,133 @@ add_action('admin_menu', function() {
         'puri-user-manager',
         'puri_render_user_manager_page'
     );
-
-	
 });
 
-add_action('admin_init', function() {
+add_action('admin_menu', function () {
+    add_submenu_page(
+        'puri-setting',
+        'Maintenance & Reset',
+        '⚙️ Maintenance',
+        'manage_options',
+        'puri-maintenance',
+        'puri_render_maintenance_page'
+    );
+}, 20);
+
+// ============================================================================
+// PART 2: DATA SYNCHRONIZATION SYSTEM
+// ============================================================================
+
+add_action('acf/save_post', 'puri_auto_sync_single_item', 20);
+
+function puri_auto_sync_single_item($post_id) {
+    // Guard: Only for pr_item CPT
+    if (get_post_type($post_id) !== 'pr_item') return;
+    if (defined('DOING_AUTOSAVE') && DOING_AUTOSAVE) return;
+    
+    // Ensure ACF is available
+    if (!function_exists('get_field')) return;
+    
     global $wpdb;
-
-    // =========================================================================
-    // 1. HANDLER: REPAIR & SYNC
-    // =========================================================================
-    if (isset($_POST['puri_do_maintenance_action']) && check_admin_referer('puri_mt_action')) {
-        puri_check_cap('manage_options');
-        
-        // --- A. REPAIR TABLES ---
-        if (isset($_POST['puri_do_repair_tables'])) {
-            require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
-            $collate = $wpdb->get_charset_collate();
-            
-            // Tabel Items (Bridge wp_post_id)
-            $sql_items = "CREATE TABLE IF NOT EXISTS " . puri_table_name('T_ITEMS') . " (
-                id bigint(20) NOT NULL AUTO_INCREMENT,
-                wp_post_id bigint(20) UNSIGNED DEFAULT 0, 
-                sku varchar(50) NOT NULL,
-                name varchar(100) NOT NULL,
-                type enum('currency','goods','package') DEFAULT 'currency',
-                denom_value int DEFAULT 1,
-                base_price decimal(19,4) DEFAULT 0,
-                sell_rate decimal(19,4) DEFAULT 0,
-                PRIMARY KEY (id),
-                UNIQUE KEY sku (sku),
-                KEY idx_wp_post_id (wp_post_id)
-            ) $collate;";
-            
-            // Tabel Stock
-            $sql_stock = "CREATE TABLE IF NOT EXISTS " . puri_table_name('T_STOCK') . " (
-                location_id varchar(20) NOT NULL,
-                item_id bigint(20) NOT NULL,
-                qty decimal(19,4) DEFAULT 0,
-                cost_avg decimal(19,4) DEFAULT 0,
-                PRIMARY KEY (location_id, item_id)
-            ) $collate;";
-            
-            dbDelta($sql_items);
-            dbDelta($sql_stock);
-            
-            // Patch Column Check
-            $row = $wpdb->get_results("SHOW COLUMNS FROM " . puri_table_name('T_ITEMS') . " LIKE 'wp_post_id'");
-            if (empty($row)) {
-                $wpdb->query("ALTER TABLE " . puri_table_name('T_ITEMS') . " ADD COLUMN wp_post_id bigint(20) UNSIGNED DEFAULT 0 AFTER id");
-                $wpdb->query("ALTER TABLE " . puri_table_name('T_ITEMS') . " ADD INDEX idx_wp_post_id (wp_post_id)");
-            }
-            
-            puri_nuke_cache(); 
-            set_transient('puri_mt_notice', 'Struktur Tabel & Bridge ID Diperbaiki!');
-        }
-        
-        // --- B. MASS SYNC (GHOST BUSTER MODE) ---
-        if (isset($_POST['puri_do_mass_sync'])) {
-            $posts = get_posts(['post_type'=>'pr_item','numberposts'=>-1]);
-            $count_upd = 0;
-            $valid_wp_ids = [];
-            
-            // 1. Update/Insert Data yang ada di WP
-            foreach ($posts as $p) {
-                $sku = get_field('item_sku_code', $p->ID);
-                if (!$sku) continue;
-                
-                $valid_wp_ids[] = $p->ID; 
-                
-                $wpdb->replace(puri_table_name('T_ITEMS'), [
-                    'wp_post_id'  => $p->ID, 
-                    'sku'         => sanitize_text_field($sku),
-                    'name'        => $p->post_title,
-                    'type'        => get_field('type', $p->ID),
-                    'denom_value' => intval(get_field('denom_value', $p->ID) ?: 1),
-                    'sell_rate'   => floatval(get_field('sell_rate', $p->ID) ?: 0)
-                ]);
-                $count_upd++;
-            }
-
-            // 2. Hapus Ghost Items (Ada di SQL tapi tidak ada di WP)
-            $deleted_ghosts = 0;
-            if (!empty($valid_wp_ids)) {
-                $ids_str = implode(',', array_map('intval', $valid_wp_ids));
-                // Hapus hanya yang punya Bridge ID > 0 tapi ID-nya tidak ada di WP
-                $deleted_ghosts = $wpdb->query("DELETE FROM " . puri_table_name('T_ITEMS') . " WHERE wp_post_id > 0 AND wp_post_id NOT IN ($ids_str)");
-            } elseif ($count_upd == 0) {
-                // Jika WP kosong, SQL juga harus kosong
-                $deleted_ghosts = $wpdb->query("TRUNCATE TABLE " . puri_table_name('T_ITEMS'));
-            }
-
-            puri_nuke_cache(); 
-            set_transient('puri_mt_notice', "Sync Selesai: $count_upd updated, $deleted_ghosts hantu dibersihkan.");
-        }
-		
-		// NEW: User Role Update Handler
-		if (isset($_POST['puri_update_user_role']) && check_admin_referer('puri_user_role_update')) {
-			puri_check_cap('manage_options');
-			
-			$user_id = intval($_POST['user_id']);
-			$new_role = sanitize_text_field($_POST['user_role']);
-			
-			// Validate role
-			$valid_puri_roles = ['kasir', 'kasir_plus', 'finance', 'ceo', 'administrator'];
-			$valid_wp_roles = ['subscriber', 'contributor', 'author', 'editor'];
-			$all_valid_roles = array_merge($valid_puri_roles, $valid_wp_roles);
-			
-			if (in_array($new_role, $all_valid_roles)) {
-				$user = get_user_by('id', $user_id);
-				if ($user) {
-					$user->set_role($new_role);
-					set_transient('puri_user_notice', 'Role berhasil diupdate untuk ' . $user->display_name);
-				}
-			}
-			
-			wp_redirect(admin_url('admin.php?page=puri-user-manager'));
-			exit;
-		}
-		
-		// NEW: Bulk Upgrade Kasir → Kasir Plus
-		if (isset($_POST['puri_bulk_upgrade_kasir']) && check_admin_referer('puri_bulk_action')) {
-			puri_check_cap('manage_options');
-			
-			$kasir_users = get_users(['role' => 'kasir']);
-			$upgraded = 0;
-			
-			foreach ($kasir_users as $user) {
-				$user->set_role('kasir_plus');
-				$upgraded++;
-			}
-			
-			set_transient('puri_user_notice', "$upgraded kasir berhasil di-upgrade ke Kasir Plus");
-			wp_redirect(admin_url('admin.php?page=puri-user-manager'));
-			exit;
-		}
-
-        
-        wp_redirect(admin_url('admin.php?page=puri-maintenance'));
-        exit;
+    $table = puri_table_name('T_ITEMS');
+    
+    $sku = get_field('item_sku_code', $post_id);
+    if (!$sku) return; // Skip if SKU is empty
+    
+    // Prepare data
+    $data = [
+        'wp_post_id'  => $post_id,
+        'sku'         => strtoupper(sanitize_text_field($sku)),
+        'name'        => get_the_title($post_id),
+        'type'        => get_field('type', $post_id) ?: 'currency',
+        'denom_value' => intval(get_field('denom_value', $post_id) ?: 1)
+    ];
+    
+    // Check if record exists
+    $existing_id = $wpdb->get_var($wpdb->prepare(
+        "SELECT id FROM {$table} WHERE wp_post_id = %d OR sku = %s LIMIT 1",
+        $post_id, $data['sku']
+    ));
+    
+    if ($existing_id) {
+        // UPDATE existing record (preserve base_price & sell_rate)
+        $wpdb->update(
+            $table,
+            $data,
+            ['id' => $existing_id],
+            ['%d', '%s', '%s', '%s', '%d'],
+            ['%d']
+        );
+    } else {
+        // INSERT new record
+        $wpdb->insert($table, $data);
     }
+    
+    // Clear cache
+    delete_transient('puri_items_cache');
+}
 
-    // =========================================================================
-    // 2. HANDLER: HARD RESET (LEGACY v6.0.1 LOGIC)
-    // =========================================================================
-    if (isset($_POST['puri_do_hard_reset']) && check_admin_referer('puri_reset_action')) {
-        puri_check_cap('manage_options');
-        
-        $pass = $_POST['reset_confirm_password'] ?? '';
-        $current_user = wp_get_current_user();
-        
-        // Verifikasi Password WP Asli
-        if (!wp_check_password($pass, $current_user->data->user_pass, $current_user->ID)) {
-            set_transient('puri_mt_error', "Password Salah! Reset dibatalkan.");
-            wp_redirect(admin_url('admin.php?page=puri-maintenance')); 
-            exit;
-        }
-        
-        $targets = $_POST['reset_targets'] ?? [];
-        if (empty($targets)) {
-            set_transient('puri_mt_error', "Pilih target data dulu.");
-            wp_redirect(admin_url('admin.php?page=puri-maintenance')); 
-            exit;
-        }
-        
-        if (in_array('m_journal', $targets)) { 
-            $wpdb->query("TRUNCATE TABLE " . puri_table_name('T_JOURNAL')); 
-        }
-        if (in_array('m_stock', $targets)) { 
-            $wpdb->query("TRUNCATE TABLE " . puri_table_name('T_LEDGER')); 
-            $wpdb->query("TRUNCATE TABLE " . puri_table_name('T_STOCK'));
-            $wpdb->query("TRUNCATE TABLE " . puri_table_name('T_LOCKS'));  
-        }
-        if (in_array('m_consign', $targets)) { 
-            $wpdb->query("TRUNCATE TABLE " . puri_table_name('T_CONSIGN')); 
-        }
-        if (in_array('m_item', $targets)) {
-            $wpdb->query("TRUNCATE TABLE " . puri_table_name('T_ITEMS'));
-        }
-        if (in_array('m_vendor', $targets)) {
-            $vs = get_posts(['post_type'=>'pr_vendor','numberposts'=>-1]);
-            foreach($vs as $v) wp_delete_post($v->ID, true);
-        }
-        if (in_array('m_customer', $targets)) {
-            $cs = get_posts(['post_type'=>'pr_customer','numberposts'=>-1]);
-            foreach($cs as $c) wp_delete_post($c->ID, true);
-        }
-		// --- ADDED: POOL SYSTEM RESET (Following mc-17 legacy pattern) ---
-        if (in_array('m_pool', $targets)) { 
-            $wpdb->query("TRUNCATE TABLE " . $wpdb->prefix . "puri_pool_transactions");
-            $wpdb->query("TRUNCATE TABLE " . $wpdb->prefix . "puri_pool_stock");
-            $wpdb->query("TRUNCATE TABLE " . $wpdb->prefix . "puri_pool_journal");
-            $wpdb->query("TRUNCATE TABLE " . $wpdb->prefix . "puri_pool_eod_batches");
-            $logs[] = "Seluruh Arsitektur Pool (4 Tabel) berhasil dikosongkan.";
-        }
-		
-		
-		
-        
-        puri_nuke_cache(); 
-        set_transient('puri_mt_notice', "Hard Reset Berhasil.");
-        wp_redirect(admin_url('admin.php?page=puri-maintenance'));
-        exit;
-    }
-});
-
-/**************************************************************************
- * MASS SYNC DENGAN PENGAMAN OPSI  ██████████████████
- * Sinkronisasi master SKU dengan pengaman user role, 
- * dan opsi boleh override stok 
- *
- * SECURITY LAYERS:
- * 1. Button visibility (UI Layer)
- * 2. GET request validation (URL Layer)
- * 3. POST confirmation (Action Layer)
- * 4. is_super_admin() check (Core Layer)
+/**
+ * MASS SYNC: Button in CPT List
  * 
- ***********************************************************************************/
- 
-// ============================================================================
-// LAYER 1: UI PROTECTION - Hide Button for Non-Admins
-// ============================================================================
-add_action('restrict_manage_posts', function() { 
+ * Displays "MASS SYNC" button only for administrators.
+ * 
+ * @hook restrict_manage_posts
+ */
+add_action('restrict_manage_posts', function() {
+	
     $screen = get_current_screen();
-    
-    // Only show on pr_item list
-    if (!$screen || $screen->post_type !== 'pr_item') {
-        return;
-    }
-    
-    // ✅ SECURITY: Only show button to Administrators
-    if (!current_user_can('administrator')) {
-        return;
-    }
-    
-    // ✅ ADDITIONAL: Check if user level is 10 (Administrator level)
-    $current_user = wp_get_current_user();
-    $user_level = get_user_meta($current_user->ID, 'wp_user_level', true);
-    
-    if (intval($user_level) < 10) {
-        return; // Not administrator level
-    }
+    if (!$screen || $screen->post_type !== 'pr_item') return;
+	
+     
+	 if (!current_user_can('manage_options')) return;
+	 //if (!current_user_can('administrator')) return;
+	//$cap = get_user_meta(get_current_user_id(), 'riy_capabilities', true);
+	//if (empty($cap) || !isset($cap['administrator'])) return;
+
     
     $sync_url = esc_url(add_query_arg([
         'puri_mass_sync' => '1',
         '_wpnonce' => wp_create_nonce('puri_mass_sync_init')
     ], admin_url('edit.php?post_type=pr_item')));
-    
     ?>
-    <div style="display:inline-block; margin-left:10px;">
-        <a href="<?php echo $sync_url; ?>" 
-           class="button button-primary" 
-           style="background:#dc2626; border:none; position:relative;"
-           title="Administrator Only - Mass Sync SKU">
-            <i class="fa-solid fa-shield-halved"></i> ⚡ MASS SYNC (Admin Only)
-        </a>
-    </div>
-    
-    <!-- Security Warning Badge -->
-    <div style="display:inline-block; margin-left:5px;">
-        <span style="background:#fff3cd; color:#856404; padding:5px 10px; border-radius:3px; font-size:11px; border:1px solid #ffc107;">
-            <i class="fa-solid fa-user-shield"></i> Restricted Access
-        </span>
-    </div>
+    <a href="<?= $sync_url ?>" 
+       class="button button-primary" 
+       style="background:#dc2626; border:none; margin-left:10px;">
+        ⚡ MASS SYNC (Admin Only)
+    </a>
     <?php
 });
 
-
-// ============================================================================
-// LAYER 2: GET REQUEST VALIDATION - URL Access Protection
-// ============================================================================
+/**
+ * MASS SYNC: Confirmation Screen
+ * 
+ * Shows confirmation dialog with password field and options.
+ * 
+ * @hook admin_init
+ */
 add_action('admin_init', function() {
-    // Check if mass sync GET request
-    if (!isset($_GET['puri_mass_sync']) || $_GET['puri_mass_sync'] !== '1') {
-        return;
-    }
+    if (!isset($_GET['puri_mass_sync']) || $_GET['puri_mass_sync'] !== '1') return;
     
     $screen = get_current_screen();
-    if (!$screen || $screen->post_type !== 'pr_item') {
-        return;
+    if (!$screen || $screen->post_type !== 'pr_item') return;
+    
+    // Security check
+    if (!wp_verify_nonce($_GET['_wpnonce'], 'puri_mass_sync_init')) {
+        wp_die('Security check failed', 'Unauthorized', ['response' => 403]);
     }
     
-    // ========================================================================
-    // SECURITY CHECK 1: Verify Nonce
-    // ========================================================================
-    if (!isset($_GET['_wpnonce']) || !wp_verify_nonce($_GET['_wpnonce'], 'puri_mass_sync_init')) {
-        wp_die(
-            '<h1>Security Check Failed</h1>' .
-            '<p>Invalid security token. Please refresh the page and try again.</p>',
-            'Security Error',
-            ['response' => 403]
-        );
+	if (!current_user_can('manage_options')) {
+//    if (!current_user_can('administrator')) {
+        wp_die('Access Denied: Administrator only', 'Forbidden', ['response' => 403]);
     }
     
-    // ========================================================================
-    // SECURITY CHECK 2: Administrator Role
-    // ========================================================================
-    if (!current_user_can('administrator')) {
-        wp_die(
-            '<h1>Unauthorized Access</h1>' .
-            '<p><strong>Mass Sync</strong> hanya dapat diakses oleh <strong>Administrator</strong>.</p>' .
-            '<p>Role Anda saat ini: <code>' . implode(', ', wp_get_current_user()->roles) . '</code></p>' .
-            '<hr>' .
-            '<p style="color:#666; font-size:13px;">Jika Anda memerlukan akses, hubungi Komisaris Utama untuk upgrade role.</p>',
-            'Access Denied',
-            ['response' => 403, 'back_link' => true]
-        );
-    }
-    
-    // ========================================================================
-    // SECURITY CHECK 3: User Level Verification
-    // ========================================================================
-    $current_user = wp_get_current_user();
-    $user_level = get_user_meta($current_user->ID, 'wp_user_level', true);
-    
-    if (intval($user_level) < 10) {
-        wp_die(
-            '<h1>Insufficient Privileges</h1>' .
-            '<p>User level Anda (<strong>' . $user_level . '</strong>) tidak mencukupi.</p>' .
-            '<p>Mass Sync memerlukan User Level <strong>10</strong> (Administrator).</p>',
-            'Privilege Error',
-            ['response' => 403]
-        );
-    }
-    
-    // ========================================================================
-    // SECURITY CHECK 4: Super Admin Check (Multisite Safety)
-    // ========================================================================
-    if (is_multisite() && !is_super_admin()) {
-        wp_die(
-            '<h1>Super Admin Required</h1>' .
-            '<p>Pada instalasi multisite, Mass Sync hanya dapat dilakukan oleh Super Admin.</p>',
-            'Multisite Restriction',
-            ['response' => 403]
-        );
-    }
-    
-    // ========================================================================
-    // ALL CHECKS PASSED - Show Confirmation
-    // ========================================================================
     add_action('admin_notices', function() {
         $current_user = wp_get_current_user();
-        
         ?>
         <div class="notice notice-warning" style="border-left:5px solid #dc2626; background:#fff3cd;">
             <h2 style="margin-top:15px;">
-                <i class="fa-solid fa-triangle-exclamation" style="color:#dc2626;"></i> 
+                <i class="dashicons dashicons-warning"></i> 
                 Konfirmasi Mass Sync
             </h2>
             
@@ -388,19 +173,15 @@ add_action('admin_init', function() {
                 <table class="widefat" style="max-width:600px;">
                     <tr>
                         <td><strong>Operator:</strong></td>
-                        <td><?php echo esc_html($current_user->display_name); ?> (<?php echo esc_html($current_user->user_login); ?>)</td>
+                        <td><?= esc_html($current_user->display_name) ?></td>
                     </tr>
                     <tr>
                         <td><strong>Role:</strong></td>
-                        <td><span style="background:#dc2626; color:#fff; padding:3px 8px; border-radius:3px; font-size:11px;">ADMINISTRATOR</span></td>
-                    </tr>
-                    <tr>
-                        <td><strong>User Level:</strong></td>
-                        <td><?php echo get_user_meta($current_user->ID, 'wp_user_level', true); ?> / 10</td>
+                        <td><span style="background:#dc2626; color:#fff; padding:3px 8px; border-radius:3px;">ADMINISTRATOR</span></td>
                     </tr>
                     <tr>
                         <td><strong>Timestamp:</strong></td>
-                        <td><?php echo current_time('Y-m-d H:i:s'); ?></td>
+                        <td><?= current_time('Y-m-d H:i:s') ?></td>
                     </tr>
                 </table>
             </div>
@@ -408,107 +189,101 @@ add_action('admin_init', function() {
             <div style="background:#fef2f2; padding:15px; border-radius:5px; border:1px solid #fecaca; margin-bottom:15px;">
                 <h3 style="margin-top:0; color:#dc2626;">⚠️ PERINGATAN PENTING</h3>
                 <ul style="margin:10px 0; padding-left:20px;">
-                    <li>Mass Sync akan <strong>memperbarui seluruh data SKU</strong> dari WordPress ke SQL</li>
-                    <li>Proses ini akan <strong>mengunci sistem</strong> selama beberapa detik</li>
-                    <li>Pastikan <strong>tidak ada kasir yang sedang transaksi</strong></li>
-                    <li><strong style="color:#dc2626;">BACKUP DATABASE telah dibuat!</strong></li>
+                    <li>Mass Sync akan <strong>memperbarui metadata SKU</strong> (nama, tipe, denom)</li>
+                    <li>✅ <strong>AMAN</strong>: Tidak akan menimpa harga & saldo stok yang sudah ada</li>
+                    <li>Proses ini dapat <strong>dipercepat dengan checkbox "Replace All"</strong></li>
                 </ul>
             </div>
             
-            <form method="post" style="display:flex; gap:10px; align-items:center;">
+            <form method="post" style="display:flex; flex-direction:column; gap:15px;">
                 <?php wp_nonce_field('puri_admin_action', 'puri_admin_nonce'); ?>
                 <input type="hidden" name="puri_confirm_mass_sync" value="1">
                 
-                <button class="button button-primary" 
-                        type="submit" 
-                        style="background:#dc2626; border-color:#b91c1c; height:40px; font-size:14px;"
-                        onclick="return confirm('FINAL CONFIRMATION:\n\nApakah backup database sudah dibuat?\n\nApakah semua kasir sudah diberitahu?\n\nProses ini TIDAK BISA dibatalkan setelah dimulai.');">
-                    <i class="fa-solid fa-shield-halved"></i> Konfirmasi & Eksekusi Mass Sync
-                </button>
+                <!-- PASSWORD PROTECTION -->
+                <div style="background:#fff; padding:15px; border:1px solid #d1d5db; border-radius:5px;">
+                    <label style="font-weight:600; display:block; margin-bottom:8px;">
+                        🔐 Masukkan Password WP Admin Anda:
+                    </label>
+                    <input type="password" 
+                           name="admin_password" 
+                           required 
+                           style="width:100%; max-width:400px; padding:8px; border:1px solid #d1d5db; border-radius:4px;"
+                           placeholder="Password login WordPress Anda">
+                </div>
                 
-                <a class="button" 
-                   href="<?php echo esc_url(remove_query_arg(['puri_mass_sync', '_wpnonce'])); ?>" 
-                   style="height:40px; line-height:38px;">
-                    <i class="fa-solid fa-times"></i> Batalkan
-                </a>
+                <!-- REPLACE ALL CHECKBOX -->
+                <div style="background:#fff; padding:15px; border:1px solid #d1d5db; border-radius:5px;">
+                    <label style="display:flex; align-items:center; gap:10px; font-weight:600;">
+                        <input type="checkbox" name="replace_all_fields" value="1">
+                        <span>⚡ Replace All Fields (Timpa harga & rate yang sudah ada)</span>
+                    </label>
+                    <p style="margin:8px 0 0 28px; color:#666; font-size:12px;">
+                        ⚠️ <strong>PERINGATAN</strong>: Jika dicentang, sistem akan menimpa base_price dan sell_rate.<br>
+                        Default: <strong>OFF</strong> (hanya update metadata: nama, tipe, denom)
+                    </p>
+                </div>
                 
-                <span style="color:#666; font-size:12px; margin-left:10px;">
-                    <i class="fa-solid fa-info-circle"></i> 
-                    Tindakan ini akan dicatat dalam audit log
-                </span>
+                <div style="display:flex; gap:10px; align-items:center;">
+                    <button class="button button-primary" 
+                            type="submit" 
+                            style="background:#dc2626; border-color:#b91c1c; height:40px; font-size:14px;">
+                        <i class="dashicons dashicons-shield-alt"></i> Konfirmasi & Eksekusi
+                    </button>
+                    
+                    <a class="button" 
+                       href="<?= esc_url(remove_query_arg(['puri_mass_sync', '_wpnonce'])) ?>" 
+                       style="height:40px; line-height:38px;">
+                        <i class="dashicons dashicons-no"></i> Batalkan
+                    </a>
+                </div>
             </form>
         </div>
         <?php
     });
 });
 
-
-// ============================================================================
-// LAYER 3: POST CONFIRMATION - Action Execution Protection
-// ============================================================================
+/**
+ * MASS SYNC: Execution Handler
+ * 
+ * Executes batch sync with password verification.
+ * Uses UPDATE instead of REPLACE to preserve data.
+ * 
+ * @hook admin_init (priority 999)
+ */
 add_action('admin_init', function() {
     if (!isset($_POST['puri_confirm_mass_sync']) || !isset($_POST['puri_admin_nonce'])) {
         return;
     }
     
-    // ========================================================================
-    // SECURITY CHECK 1: Nonce Verification
-    // ========================================================================
-    if (!wp_verify_nonce(sanitize_text_field($_POST['puri_admin_nonce']), 'puri_admin_action')) {
-        wp_die('Nonce verification failed.', 'Security Error', ['response' => 403]);
+    // Security checks
+    if (!wp_verify_nonce($_POST['puri_admin_nonce'], 'puri_admin_action')) {
+        wp_die('Nonce verification failed', 'Security Error', ['response' => 403]);
     }
     
-    // ========================================================================
-    // SECURITY CHECK 2: Re-verify Administrator Role
-    // ========================================================================
-    if (!current_user_can('administrator')) {
-        wp_die(
-            '<h1>Unauthorized Action</h1>' .
-            '<p>Eksekusi Mass Sync ditolak. Anda tidak memiliki role Administrator.</p>',
-            'Access Denied',
-            ['response' => 403]
-        );
+	if (!current_user_can('manage_options')) {
+    //if (!current_user_can('administrator')) {
+        wp_die('Access Denied', 'Forbidden', ['response' => 403]);
     }
     
-    // ========================================================================
-    // SECURITY CHECK 3: User Level Check
-    // ========================================================================
+    // Password verification
+    $password = $_POST['admin_password'] ?? '';
     $current_user = wp_get_current_user();
-    $user_level = get_user_meta($current_user->ID, 'wp_user_level', true);
     
-    if (intval($user_level) < 10) {
-        wp_die('User level insufficient for Mass Sync execution.', 'Privilege Error', ['response' => 403]);
+    if (!wp_check_password($password, $current_user->data->user_pass, $current_user->ID)) {
+        wp_redirect(admin_url('edit.php?post_type=pr_item&sync_error=invalid_password'));
+        exit;
     }
     
-    // ========================================================================
-    // ALL SECURITY CHECKS PASSED - Execute Mass Sync
-    // ========================================================================
+    // Get options
+    $replace_all = isset($_POST['replace_all_fields']);
+    
     global $wpdb;
-    
-    // Start audit log
-    $start_time = microtime(true);
-    $operator_info = [
-        'user_id' => $current_user->ID,
-        'username' => $current_user->user_login,
-        'display_name' => $current_user->display_name,
-        'ip_address' => $_SERVER['REMOTE_ADDR'] ?? 'unknown',
-        'user_agent' => $_SERVER['HTTP_USER_AGENT'] ?? 'unknown'
-    ];
-    
-    error_log("============================================");
-    error_log("MASS SYNC EXECUTION STARTED");
-    error_log("Operator: {$operator_info['display_name']} ({$operator_info['username']})");
-    error_log("IP: {$operator_info['ip_address']}");
-    error_log("Timestamp: " . current_time('mysql'));
-    error_log("============================================");
-    
-    // Execute sync
+    $table = puri_table_name('T_ITEMS');
     $posts = get_posts(['post_type' => 'pr_item', 'numberposts' => -1, 'fields' => 'ids']);
+    
     $count_updated = 0;
     $count_inserted = 0;
     $count_skipped = 0;
-    
-    $table = puri_table_name('T_ITEMS');
     
     foreach ($posts as $post_id) {
         if (!function_exists('get_field')) {
@@ -522,10 +297,12 @@ add_action('admin_init', function() {
             continue;
         }
         
-        // ✅ FIX: Use UPDATE/INSERT instead of REPLACE
-        $existing_id = $wpdb->get_var($wpdb->prepare(
-            "SELECT id FROM {$table} WHERE sku = %s",
-            strtoupper(sanitize_text_field($sku))
+        // Check existing record
+        $existing = $wpdb->get_row($wpdb->prepare(
+            "SELECT id, base_price, sell_rate FROM {$table} 
+             WHERE wp_post_id = %d OR sku = %s 
+             LIMIT 1",
+            $post_id, strtoupper(sanitize_text_field($sku))
         ));
         
         $data = [
@@ -533,17 +310,35 @@ add_action('admin_init', function() {
             'sku'         => strtoupper(sanitize_text_field($sku)),
             'name'        => get_the_title($post_id),
             'type'        => get_field('type', $post_id) ?: 'currency',
-            'denom_value' => intval(get_field('denom_value', $post_id) ?: 1),
-            'sell_rate'   => floatval(get_field('sell_rate', $post_id) ?: 0)
+            'denom_value' => intval(get_field('denom_value', $post_id) ?: 1)
         ];
         
-        if ($existing_id) {
+        // Conditional: Only overwrite price if checkbox is checked
+        if ($replace_all) {
+            $data['base_price'] = floatval(get_field('base_price', $post_id) ?: 0);
+            $data['sell_rate']  = floatval(get_field('sell_rate', $post_id) ?: 0);
+        } else {
+            // Preserve existing values if they exist
+            if ($existing && $existing->base_price > 0) {
+                // Skip base_price
+            } else {
+                $data['base_price'] = floatval(get_field('base_price', $post_id) ?: 0);
+            }
+            
+            if ($existing && $existing->sell_rate > 0) {
+                // Skip sell_rate
+            } else {
+                $data['sell_rate'] = floatval(get_field('sell_rate', $post_id) ?: 0);
+            }
+        }
+        
+        if ($existing) {
             // UPDATE existing
             $result = $wpdb->update(
                 $table,
                 $data,
-                ['id' => $existing_id],
-                ['%d', '%s', '%s', '%s', '%d', '%f'],
+                ['id' => $existing->id],
+                ['%d', '%s', '%s', '%s', '%d', '%f', '%f'],
                 ['%d']
             );
             if ($result !== false) $count_updated++;
@@ -554,208 +349,976 @@ add_action('admin_init', function() {
         }
     }
     
-    // Calculate execution time
-    $execution_time = round(microtime(true) - $start_time, 2);
-    
     // Log results
-    error_log("============================================");
-    error_log("MASS SYNC COMPLETED");
-    error_log("Updated: {$count_updated} items");
-    error_log("Inserted: {$count_inserted} items");
-    error_log("Skipped: {$count_skipped} items");
-    error_log("Execution time: {$execution_time}s");
-    error_log("============================================");
+    error_log(sprintf(
+        "PURI MASS SYNC: Updated=%d, Inserted=%d, Skipped=%d, Operator=%s",
+        $count_updated, $count_inserted, $count_skipped, $current_user->user_login
+    ));
     
-    // User notification
-    add_action('admin_notices', function() use ($count_updated, $count_inserted, $count_skipped, $execution_time, $operator_info) {
+    // Clear cache
+    delete_transient('puri_items_cache');
+    
+    // Redirect with success message
+    wp_redirect(admin_url(sprintf(
+        'edit.php?post_type=pr_item&sync_success=1&updated=%d&inserted=%d&skipped=%d',
+        $count_updated, $count_inserted, $count_skipped
+    )));
+    exit;
+}, 999);
+
+/**
+ * MASS SYNC: Success/Error Notifications
+ * 
+ * @hook admin_notices
+ */
+add_action('admin_notices', function() {
+    // Success message
+    if (isset($_GET['sync_success'])) {
+        $updated  = intval($_GET['updated'] ?? 0);
+        $inserted = intval($_GET['inserted'] ?? 0);
+        $skipped  = intval($_GET['skipped'] ?? 0);
         ?>
         <div class="notice notice-success is-dismissible">
-            <h2>✅ Mass Sync Berhasil Dieksekusi</h2>
-            <table class="widefat" style="max-width:600px; margin:10px 0;">
+            <h2>✅ Mass Sync Berhasil!</h2>
+            <table style="margin-top:10px; border-collapse:collapse;">
                 <tr>
-                    <td><strong>Items Updated:</strong></td>
-                    <td><?php echo $count_updated; ?></td>
+                    <td style="padding:5px; font-weight:600;">Items Updated:</td>
+                    <td style="padding:5px;"><?= $updated ?></td>
                 </tr>
                 <tr>
-                    <td><strong>Items Inserted:</strong></td>
-                    <td><?php echo $count_inserted; ?></td>
+                    <td style="padding:5px; font-weight:600;">Items Inserted:</td>
+                    <td style="padding:5px;"><?= $inserted ?></td>
                 </tr>
                 <tr>
-                    <td><strong>Items Skipped:</strong></td>
-                    <td><?php echo $count_skipped; ?></td>
-                </tr>
-                <tr>
-                    <td><strong>Execution Time:</strong></td>
-                    <td><?php echo $execution_time; ?>s</td>
-                </tr>
-                <tr>
-                    <td><strong>Executed By:</strong></td>
-                    <td><?php echo esc_html($operator_info['display_name']); ?></td>
-                </tr>
-                <tr>
-                    <td><strong>Timestamp:</strong></td>
-                    <td><?php echo current_time('Y-m-d H:i:s'); ?></td>
+                    <td style="padding:5px; font-weight:600;">Items Skipped:</td>
+                    <td style="padding:5px;"><?= $skipped ?></td>
                 </tr>
             </table>
-            <p style="color:#666; font-size:12px;">
-                <i class="fa-solid fa-check-circle"></i> 
-                Sinkronisasi telah tercatat dalam audit log sistem.
-            </p>
         </div>
         <?php
-    });
-}, 999); // High priority to run after other admin_init hooks
+    }
+    
+    // Error message
+    if (isset($_GET['sync_error'])) {
+        $error = $_GET['sync_error'];
+        $message = 'Unknown error';
+        
+        if ($error === 'invalid_password') {
+            $message = '❌ Password salah! Mass Sync dibatalkan untuk keamanan.';
+        }
+        ?>
+        <div class="notice notice-error is-dismissible">
+            <p><strong><?= esc_html($message) ?></strong></p>
+        </div>
+        <?php
+    }
+});
 
+// ============================================================================
+// PART 3: DISASTER RECOVERY SYSTEM
+// ============================================================================
 
 /**
- * ============================================================================
- * BONUS: AUDIT LOG TABLE (Optional)
- * ============================================================================
- * Uncomment jika ingin menyimpan audit log ke database
+ * REPAIR BROKEN LINK: Core Function
+ * 
+ * Repairs broken relationships between T_STOCK and T_ITEMS
+ * using wp_post_id as bridge column.
+ * 
+ * @return array {
+ *     @type bool   $success  Whether repair succeeded
+ *     @type string $message  Human-readable result message
+ *     @type int    $repaired Number of links repaired
+ * }
  */
-/*
-function puri_log_mass_sync_execution($data) {
+function puri_repair_broken_link() {
     global $wpdb;
     
-    $wpdb->insert($wpdb->prefix . 'puri_audit_log', [
-        'action' => 'mass_sync',
-        'user_id' => $data['user_id'],
-        'details' => json_encode($data),
-        'ip_address' => $data['ip_address'],
-        'created_at' => current_time('mysql')
-    ]);
-}
-*/
-
-
-
-
-
-
-
-/**
- * NUCLEAR CACHE CLEAR
- */
-function puri_nuke_cache() {
-    global $wpdb;
-    $wpdb->query("DELETE FROM $wpdb->options WHERE option_name LIKE '_transient_puri_%'");
-    $wpdb->query("DELETE FROM $wpdb->options WHERE option_name LIKE '_transient_timeout_puri_%'");
-    if (function_exists('wp_cache_flush')) wp_cache_flush();
-}
-
-/**
- * PURI Integrity Check (SAFE GUARDED)
- * Fungsi ini dibutuhkan oleh MC-00. Kita definisikan di sini jika belum ada.
- */
-if (!function_exists('puri_get_integrity_status')) {
-    function puri_get_integrity_status() {
-        global $wpdb;
-        $wp_count = wp_count_posts('pr_item')->publish;
-        $table_items = puri_table_name('T_ITEMS');
+    $table_stock = puri_table_name('T_STOCK');
+    $table_items = puri_table_name('T_ITEMS');
+    
+    // Start transaction
+    $wpdb->query('START TRANSACTION');
+    
+    try {
+        // Identify broken links
+        $broken_count = $wpdb->get_var("
+            SELECT COUNT(*) 
+            FROM {$table_stock} s
+            LEFT JOIN {$table_items} i ON s.item_id = i.id
+            WHERE i.id IS NULL AND s.wp_post_id > 0
+        ");
         
-        if ($wpdb->get_var("SHOW TABLES LIKE '$table_items'") != $table_items) {
-            $sql_count = 0;
-        } else {
-            $sql_count = $wpdb->get_var("SELECT COUNT(*) FROM $table_items WHERE wp_post_id > 0");
+        if ($broken_count == 0) {
+            $wpdb->query('ROLLBACK');
+            return [
+                'success' => true,
+                'message' => '✅ Tidak ada broken link yang ditemukan. Sistem sudah sehat!',
+                'repaired' => 0
+            ];
         }
         
-        $synced = ($wp_count == $sql_count);
-
-        // Return Hybrid Format (Kompatibel dengan semua versi MC-00)
+        // Repair links using wp_post_id as bridge
+        $repair_query = "
+            UPDATE {$table_stock} s
+            INNER JOIN {$table_items} i ON s.wp_post_id = i.wp_post_id
+            SET s.item_id = i.id
+            WHERE s.item_id != i.id OR s.item_id = 0
+        ";
+        
+        $wpdb->query($repair_query);
+        
+        if ($wpdb->last_error) {
+            throw new Exception("Database Error: " . $wpdb->last_error);
+        }
+        
+        $rows_affected = $wpdb->rows_affected;
+        
+        // Verify repair success
+        $remaining_broken = $wpdb->get_var("
+            SELECT COUNT(*) 
+            FROM {$table_stock} s
+            LEFT JOIN {$table_items} i ON s.item_id = i.id
+            WHERE i.id IS NULL AND s.wp_post_id > 0
+        ");
+        
+        if ($remaining_broken > 0) {
+            throw new Exception("Masih ada {$remaining_broken} link yang tidak bisa diperbaiki otomatis.");
+        }
+        
+        $wpdb->query('COMMIT');
+        
+        // Clear cache
+        delete_transient('puri_items_cache');
+        delete_transient('puri_stock_cache');
+        
+        // Log success
+        error_log("PURI REPAIR: Successfully repaired {$rows_affected} broken links");
+        
         return [
-            // Format Baru
-            'is_synced' => $synced,
-            'wp_count'  => $wp_count,
-            'sql_count' => $sql_count,
-            // Format Lama (Legacy)
-            'items' => [
-                'wp'     => $wp_count,
-                'sql'    => $sql_count,
-                'synced' => $synced
-            ]
+            'success' => true,
+            'message' => "✅ Berhasil memperbaiki {$rows_affected} broken link!",
+            'repaired' => $rows_affected
+        ];
+        
+    } catch (Exception $e) {
+        $wpdb->query('ROLLBACK');
+        error_log("PURI REPAIR ERROR: " . $e->getMessage());
+        
+        return [
+            'success' => false,
+            'message' => '❌ Repair gagal: ' . $e->getMessage(),
+            'repaired' => 0
         ];
     }
 }
 
+/**
+ * REPAIR BROKEN LINK: Handler
+ * 
+ * Processes repair request with password verification.
+ * 
+ * @hook admin_init
+ */
+add_action('admin_init', function() {
+    if (!isset($_POST['puri_do_repair_link']) || !isset($_POST['puri_admin_nonce'])) {
+        return;
+    }
+    
+    // Security checks
+    check_admin_referer('puri_admin_action', 'puri_admin_nonce');
+    puri_check_cap('manage_options');
+    
+    // Password verification
+    $password = $_POST['repair_password'] ?? '';
+    $current_user = wp_get_current_user();
+    
+    if (!wp_check_password($password, $current_user->data->user_pass, $current_user->ID)) {
+        set_transient('puri_mt_error', "❌ Password salah! Repair dibatalkan untuk keamanan.");
+        wp_redirect(admin_url('admin.php?page=puri-maintenance'));
+        exit;
+    }
+    
+    // Execute repair
+    $result = puri_repair_broken_link();
+    
+    if ($result['success']) {
+        set_transient('puri_mt_notice', $result['message']);
+    } else {
+        set_transient('puri_mt_error', $result['message']);
+    }
+    
+    wp_redirect(admin_url('admin.php?page=puri-maintenance'));
+    exit;
+});
+
+// ============================================================================
+// PART 4: HARD RESET SYSTEM
+// ============================================================================
+
+/**
+ * HARD RESET: Handler
+ * 
+ * Executes selective table truncation with password verification.
+ * 
+ * @hook admin_init
+ */
+add_action('admin_init', function() {
+    if (!isset($_POST['puri_do_hard_reset']) || !check_admin_referer('puri_reset_action')) {
+        return;
+    }
+    
+    puri_check_cap('manage_options');
+    
+    // Password verification
+    $password = $_POST['reset_confirm_password'] ?? '';
+    $current_user = wp_get_current_user();
+    
+    if (!wp_check_password($password, $current_user->data->user_pass, $current_user->ID)) {
+        set_transient('puri_mt_error', "❌ Password salah! Reset dibatalkan.");
+        wp_redirect(admin_url('admin.php?page=puri-maintenance')); 
+        exit;
+    }
+    
+    $targets = $_POST['reset_targets'] ?? [];
+    if (empty($targets)) {
+        set_transient('puri_mt_error', "Pilih target data dulu.");
+        wp_redirect(admin_url('admin.php?page=puri-maintenance')); 
+        exit;
+    }
+    
+    global $wpdb;
+    
+    // Execute resets
+    if (in_array('m_journal', $targets)) { 
+        $wpdb->query("TRUNCATE TABLE " . puri_table_name('T_JOURNAL')); 
+    }
+    
+    if (in_array('m_stock', $targets)) { 
+        $wpdb->query("TRUNCATE TABLE " . puri_table_name('T_LEDGER')); 
+        $wpdb->query("TRUNCATE TABLE " . puri_table_name('T_STOCK'));
+        $wpdb->query("TRUNCATE TABLE " . puri_table_name('T_LOCKS'));  
+    }
+    
+    if (in_array('m_consign', $targets)) { 
+        $wpdb->query("TRUNCATE TABLE " . puri_table_name('T_CONSIGN')); 
+    }
+    
+    if (in_array('m_item', $targets)) {
+        $wpdb->query("TRUNCATE TABLE " . puri_table_name('T_ITEMS'));
+    }
+    
+    if (in_array('m_vendor', $targets)) {
+        $vendors = get_posts(['post_type'=>'pr_vendor','numberposts'=>-1]);
+        foreach($vendors as $v) wp_delete_post($v->ID, true);
+    }
+    
+    if (in_array('m_customer', $targets)) {
+        $customers = get_posts(['post_type'=>'pr_customer','numberposts'=>-1]);
+        foreach($customers as $c) wp_delete_post($c->ID, true);
+    }
+    
+    if (in_array('m_pool', $targets)) { 
+        $wpdb->query("TRUNCATE TABLE " . puri_table_name('T_POOL_TRANSACTIONS'));
+        $wpdb->query("TRUNCATE TABLE " . puri_table_name('T_POOL_STOCK'));
+        $wpdb->query("TRUNCATE TABLE " . puri_table_name('T_POOL_JOURNAL'));
+        $wpdb->query("TRUNCATE TABLE " . puri_table_name('T_EOD_BATCHES'));
+    }
+    
+    // Clear cache
+    delete_transient('puri_items_cache');
+    delete_transient('puri_stock_cache');
+    
+    // Log action
+    error_log(sprintf(
+        "PURI HARD RESET: Targets=%s, Operator=%s",
+        implode(',', $targets),
+        $current_user->user_login
+    ));
+    
+    set_transient('puri_mt_notice', "✅ Hard Reset berhasil dieksekusi.");
+    wp_redirect(admin_url('admin.php?page=puri-maintenance'));
+    exit;
+});
+
+// ============================================================================
+// PART 5: UI RENDERING
+// ============================================================================
+
+/**
+ * RENDER: Maintenance Page
+ * 
+ * 2-panel layout:
+ * - Left: Control center (diagnostics + action buttons)
+ * - Right: Documentation & help
+ */
 function puri_render_maintenance_page() {
+    puri_check_cap('manage_options');
+    
+    // Get notifications
     $notice = get_transient('puri_mt_notice');
     $error  = get_transient('puri_mt_error');
     delete_transient('puri_mt_notice'); 
     delete_transient('puri_mt_error');
     
-    // Panggil fungsi status (sekarang aman)
+    // Get system status
     $status = puri_get_integrity_status();
     
-    // Ambil data (aman karena format hybrid)
-    $is_synced = $status['is_synced'];
-    $wp_count  = $status['wp_count'];
-    $sql_count = $status['sql_count'];
-
+    // Diagnostic: Check for broken links
+    global $wpdb;
+    $table_stock = puri_table_name('T_STOCK');
+    $table_items = puri_table_name('T_ITEMS');
+    
+    $broken_links = $wpdb->get_var("
+        SELECT COUNT(*) 
+        FROM {$table_stock} s
+        LEFT JOIN {$table_items} i ON s.item_id = i.id
+        WHERE i.id IS NULL AND s.wp_post_id > 0
+    ");
+    
     ?>
-    <div class="wrap">
-      <h1>⚠️ System Maintenance & Reset</h1>
-      
-      <?php if ($notice): ?><div class="notice notice-success is-dismissible"><p><?php echo esc_html($notice); ?></p></div><?php endif; ?>
-      <?php if ($error): ?><div class="notice notice-error is-dismissible"><p><?php echo esc_html($error); ?></p></div><?php endif; ?>
-      
-      <div class="card" style="margin-top:20px;">
-        <h2>📊 System Integrity Status</h2>
-        <table class="widefat fixed striped">
-           <thead><tr><th>Component</th><th>WordPress Data</th><th>SQL Data</th><th>Status</th></tr></thead>
-           <tbody>
-             <tr>
-               <td>Master Items (SKU)</td>
-               <td><?php echo $wp_count; ?> items</td>
-               <td><?php echo $sql_count; ?> rows</td>
-               <td>
-                 <?php if($is_synced): ?>
-                   <span style="color:green;font-weight:bold;">✅ SYNCED</span>
-                 <?php else: ?>
-                   <span style="color:red;font-weight:bold;">❌ OUT OF SYNC</span>
-                 <?php endif; ?>
-               </td>
-             </tr>
-           </tbody>
-        </table>
+    <div class="wrap puri-maintenance-hub">
+        <h1>⚙️ System Maintenance & Reset v7.0.1</h1>
         
-        <form method="post" style="margin-top:15px;">
-           <?php wp_nonce_field('puri_mt_action'); ?>
-           <input type="hidden" name="puri_do_maintenance_action" value="1">
-           <button type="submit" name="puri_do_repair_tables" class="button button-secondary">🛠 Perbaiki Struktur Tabel (SQL)</button>
-           <button type="submit" name="puri_do_mass_sync" class="button button-secondary">⚡ Mass Sync SKU ke SQL</button>
-        </form>
-      </div>
-      
-      <form method="post" style="margin-top:30px;" class="card">
-        <h2 style="color:#dc2626;">☠️ DANGER ZONE: Hard Reset</h2>
-        <p>Pilih data yang ingin DIHAPUS PERMANEN:</p>
-        <?php wp_nonce_field('puri_reset_action'); ?>
+        <?php if ($notice): ?>
+            <div class="notice notice-success is-dismissible">
+                <p><?= esc_html($notice) ?></p>
+            </div>
+        <?php endif; ?>
         
-        <p>
-           <label><input type="checkbox" name="reset_targets[]" value="m_journal"> <strong>Jurnal Akuntansi</strong> (T_JOURNAL)</label><br>
-           <label><input type="checkbox" name="reset_targets[]" value="m_stock"> <strong>Data Stok & Mutasi</strong> (T_STOCK, T_LEDGER)</label><br>
-           <label><input type="checkbox" name="reset_targets[]" value="m_consign"> <strong>Data Konsinyasi</strong> (T_CONSIGN)</label><br>
-		   <label><input type="checkbox" name="reset_targets[]" value="m_pool"> <strong>Arsitektur Pool POS</strong> (T_POOL_TRANSACTIONS, STOCK, JOURNAL, EOD)</label>
-           <hr>
-           <label><input type="checkbox" name="reset_targets[]" value="m_item"> <strong>Master Item SQL</strong> (T_ITEMS - <em>Perlu Sync Ulang</em>)</label><br>
-           <label><input type="checkbox" name="reset_targets[]" value="m_vendor"> Master Vendor (CPT)</label><br>
-           <label><input type="checkbox" name="reset_targets[]" value="m_customer"> Master Customer (CPT)</label>
-        </p>
+        <?php if ($error): ?>
+            <div class="notice notice-error is-dismissible">
+                <p><?= esc_html($error) ?></p>
+            </div>
+        <?php endif; ?>
         
-        <div style="background:#fff1f2;padding:12px;border:1px solid #fecaca">
-          <label><strong>Password Login Anda:</strong></label><br>
-          <input type="password" name="reset_confirm_password" required style="width:300px;padding:8px;margin-top:5px;"><br>
-          <button type="submit" name="puri_do_hard_reset" class="button button-primary" style="background:#dc2626;border-color:#b91c1c;" onclick="return confirm('YAKIN MENGHAPUS DATA? TINDAKAN INI TIDAK BISA DIBATALKAN!')">🔥 EKSEKUSI PENGHAPUSAN DATA</button>
+        <!-- =============================================================== -->
+        <!-- 2-PANEL LAYOUT -->
+        <!-- =============================================================== -->
+        <div class="puri-2panel-container">
+            
+            <!-- ========================================== -->
+            <!-- LEFT PANEL: Control Center -->
+            <!-- ========================================== -->
+            <div class="puri-panel-left">
+                
+                <!-- CARD: System Integrity Status -->
+                <div class="puri-card">
+                    <h2>📊 System Integrity Status</h2>
+                    <table class="widefat fixed striped">
+                        <thead>
+                            <tr>
+                                <th>Component</th>
+                                <th>WordPress</th>
+                                <th>SQL</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td><strong>Master Items (SKU)</strong></td>
+                                <td><?= $status['wp_count'] ?> items</td>
+                                <td><?= $status['sql_count'] ?> rows</td>
+                                <td>
+                                    <?php if($status['is_synced']): ?>
+                                        <span class="badge badge-success">✅ SYNCED</span>
+                                    <?php else: ?>
+                                        <span class="badge badge-error">❌ OUT OF SYNC</span>
+                                    <?php endif; ?>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td><strong>Stock-Items Link</strong></td>
+                                <td colspan="2">
+                                    <?php if($broken_links > 0): ?>
+                                        <span style="color:#dc2626; font-weight:600;">
+                                            ⚠️ <?= $broken_links ?> broken link(s) detected
+                                        </span>
+                                    <?php else: ?>
+                                        <span style="color:#059669; font-weight:600;">
+                                            All links healthy
+                                        </span>
+                                    <?php endif; ?>
+                                </td>
+                                <td>
+                                    <?php if($broken_links > 0): ?>
+                                        <span class="badge badge-warning">⚠️ NEEDS REPAIR</span>
+                                    <?php else: ?>
+                                        <span class="badge badge-success">✅ HEALTHY</span>
+                                    <?php endif; ?>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                    
+                    <!-- REPAIR BUTTON -->
+                    <?php if($broken_links > 0): ?>
+                    <div class="repair-section">
+                        <div class="alert alert-warning">
+                            <strong>🚨 Disaster Detected!</strong>
+                            <p>Sistem mendeteksi adanya broken link antara tabel Stock dan Items.</p>
+                            <p>Hal ini menyebabkan kartu stok di Panel POS menampilkan nilai 0 (nol).</p>
+                        </div>
+                        
+                        <button type="button" 
+                                class="button button-primary button-large"
+                                onclick="openRepairModal()"
+                                style="background:#dc2626; border-color:#b91c1c; width:100%; height:50px; font-size:16px; font-weight:600;">
+                            🔧 REPAIR BROKEN LINK NOW
+                        </button>
+                    </div>
+                    <?php else: ?>
+                    <div class="alert alert-success">
+                        <strong>✅ System Healthy</strong>
+                        <p>Tidak ada broken link yang terdeteksi. Kartu stok berjalan normal.</p>
+                    </div>
+                    <?php endif; ?>
+                </div>
+                
+                <!-- CARD: Database Reset -->
+                <div class="puri-card danger-zone">
+                    <h2 style="color:#dc2626;">☢️ DANGER ZONE: Hard Reset</h2>
+                    <p>Pilih data yang ingin <strong>DIHAPUS PERMANEN</strong>:</p>
+                    
+                    <form method="post" class="reset-form">
+                        <?php wp_nonce_field('puri_reset_action'); ?>
+                        
+                        <div class="checkbox-group">
+                            <label>
+                                <input type="checkbox" name="reset_targets[]" value="m_journal">
+                                <strong>Jurnal Akuntansi</strong> (T_JOURNAL)
+                            </label>
+                            <label>
+                                <input type="checkbox" name="reset_targets[]" value="m_stock">
+                                <strong>Data Stok & Mutasi</strong> (T_STOCK, T_LEDGER)
+                            </label>
+                            <label>
+                                <input type="checkbox" name="reset_targets[]" value="m_consign">
+                                <strong>Data Konsinyasi</strong> (T_CONSIGN)
+                            </label>
+                            <label>
+                                <input type="checkbox" name="reset_targets[]" value="m_pool">
+                                <strong>Arsitektur Pool POS</strong> (4 Tabel)
+                            </label>
+                        </div>
+                        
+                        <hr>
+                        
+                        <div class="checkbox-group">
+                            <label>
+                                <input type="checkbox" name="reset_targets[]" value="m_item">
+                                <strong>Master Item SQL</strong> (T_ITEMS - Perlu Sync Ulang)
+                            </label>
+                            <label>
+                                <input type="checkbox" name="reset_targets[]" value="m_vendor">
+                                Master Vendor (CPT)
+                            </label>
+                            <label>
+                                <input type="checkbox" name="reset_targets[]" value="m_customer">
+                                Master Customer (CPT)
+                            </label>
+                        </div>
+                        
+                        <div class="password-box">
+                            <label><strong>Password Login Anda:</strong></label>
+                            <input type="password" 
+                                   name="reset_confirm_password" 
+                                   required 
+                                   placeholder="Masukkan password WP admin">
+                            
+                            <button type="submit" 
+                                    name="puri_do_hard_reset" 
+                                    class="button button-danger"
+                                    onclick="return confirm('YAKIN MENGHAPUS DATA? TINDAKAN INI TIDAK BISA DIBATALKAN!')">
+                                🔥 EKSEKUSI PENGHAPUSAN DATA
+                            </button>
+                        </div>
+                    </form>
+                </div>
+                
+            </div>
+            
+            <!-- ========================================== -->
+            <!-- RIGHT PANEL: Documentation -->
+            <!-- ========================================== -->
+            <div class="puri-panel-right">
+                
+                <!-- HELP: Repair Broken Link -->
+                <div class="help-card">
+                    <h3>🔧 Repair Broken Link</h3>
+                    
+                    <div class="help-section">
+                        <h4>Apa yang Dilakukan Sistem?</h4>
+                        <ol>
+                            <li>Mencari record di tabel <code>T_STOCK</code> yang relasi <code>item_id</code>-nya putus</li>
+                            <li>Menggunakan <code>wp_post_id</code> sebagai "jembatan" untuk re-link ke tabel <code>T_ITEMS</code></li>
+                            <li>Update <code>item_id</code> di <code>T_STOCK</code> agar match dengan <code>id</code> di <code>T_ITEMS</code></li>
+                            <li>Verifikasi hasil repair dan rollback jika ada error</li>
+                        </ol>
+                    </div>
+                    
+                    <div class="help-section">
+                        <h4>⚠️ Risiko & Cautions</h4>
+                        <ul class="warning-list">
+                            <li><strong>Database Lock</strong>: Proses ini akan mengunci tabel selama beberapa detik</li>
+                            <li><strong>Kasir Aktif</strong>: Pastikan tidak ada kasir yang sedang transaksi</li>
+                            <li><strong>Backup Required</strong>: Wajib backup database sebelum eksekusi</li>
+                        </ul>
+                    </div>
+                    
+                    <div class="help-section">
+                        <h4>✅ Mitigasi yang Harus Disiapkan</h4>
+                        <ol>
+                            <li><strong>Backup Database</strong>
+                                <ul>
+                                    <li>Via cPanel → phpMyAdmin → Export</li>
+                                    <li>Atau gunakan plugin backup (UpdraftPlus, BackWPup)</li>
+                                </ul>
+                            </li>
+                            <li><strong>Informasikan Tim Kasir</strong>
+                                <ul>
+                                    <li>Jangan lakukan transaksi selama 1-2 menit</li>
+                                    <li>Beri notifikasi via WhatsApp/Telegram</li>
+                                </ul>
+                            </li>
+                            <li><strong>Test di Staging</strong>
+                                <ul>
+                                    <li>Jika memungkinkan, test dulu di server staging</li>
+                                    <li>Baru eksekusi di production</li>
+                                </ul>
+                            </li>
+                        </ol>
+                    </div>
+                    
+                    <div class="help-section">
+                        <h4>🎯 Kapan Harus Repair?</h4>
+                        <ul>
+                            <li>✅ <strong>Segera</strong>: Jika kartu stok di POS menampilkan nilai 0 padahal seharusnya ada</li>
+                            <li>✅ <strong>Segera</strong>: Jika badge status menunjukkan "NEEDS REPAIR"</li>
+                            <li>❌ <strong>Jangan</strong>: Jika badge status sudah "HEALTHY"</li>
+                        </ul>
+                    </div>
+                </div>
+                
+                <!-- HELP: Hard Reset -->
+                <div class="help-card">
+                    <h3>☢️ Hard Reset Database</h3>
+                    
+                    <div class="help-section">
+                        <h4>Apa yang Dilakukan Sistem?</h4>
+                        <p>Menjalankan <code>TRUNCATE TABLE</code> pada tabel yang dipilih, menghapus seluruh data secara permanen.</p>
+                    </div>
+                    
+                    <div class="help-section">
+                        <h4>⚠️ PERINGATAN KERAS</h4>
+                        <ul class="warning-list">
+                            <li><strong>IRREVERSIBLE</strong>: Data yang dihapus tidak bisa dikembalikan</li>
+                            <li><strong>CASCADE EFFECT</strong>: Menghapus T_ITEMS akan membuat semua transaksi orphan</li>
+                            <li><strong>BUSINESS IMPACT</strong>: Laporan keuangan akan hilang permanen</li>
+                        </ul>
+                    </div>
+                    
+                    <div class="help-section">
+                        <h4>🎯 Kapan Boleh Reset?</h4>
+                        <ul>
+                            <li>✅ <strong>Development/Staging</strong>: Untuk testing fitur baru</li>
+                            <li>✅ <strong>Migration Fresh Start</strong>: Migrasi sistem baru dari nol</li>
+                            <li>❌ <strong>Production</strong>: JANGAN PERNAH kecuali disaster recovery</li>
+                        </ul>
+                    </div>
+                </div>
+                
+                <!-- HELP: Mass Sync -->
+                <div class="help-card">
+                    <h3>⚡ Mass Sync SKU</h3>
+                    
+                    <div class="help-section">
+                        <h4>Cara Kerja Auto-Sync</h4>
+                        <p>Setiap kali Anda save/edit item di WordPress, sistem otomatis sync ke SQL tanpa perlu manual trigger.</p>
+                    </div>
+                    
+                    <div class="help-section">
+                        <h4>Cara Kerja Mass Sync</h4>
+                        <ol>
+                            <li>Buka halaman <strong>Products → All Items</strong></li>
+                            <li>Klik tombol merah <strong>"MASS SYNC"</strong></li>
+                            <li>Masukkan password WP admin</li>
+                            <li>Centang "Replace All" jika ingin timpa harga</li>
+                            <li>Klik "Eksekusi"</li>
+                        </ol>
+                    </div>
+                    
+                    <div class="help-section">
+                        <h4>🎯 Default Mode: Safe Sync</h4>
+                        <ul>
+                            <li>✅ Update: SKU, Nama, Tipe, Denom</li>
+                            <li>❌ Skip: Harga, Rate (preserve nilai lama)</li>
+                            <li>⚡ Cepat & aman untuk update metadata</li>
+                        </ul>
+                    </div>
+                </div>
+                
+            </div>
+            
         </div>
-      </form>
+        
+        <!-- =============================================================== -->
+        <!-- MODAL: Repair Confirmation -->
+        <!-- =============================================================== -->
+        <div id="repairModal" class="puri-modal" style="display:none;">
+            <div class="puri-modal-content">
+                <span class="puri-modal-close" onclick="closeRepairModal()">&times;</span>
+                <h2>🔧 Konfirmasi Repair Broken Link</h2>
+                
+                <div class="modal-warning">
+                    <strong>⚠️ Pre-flight Check:</strong>
+                    <ul>
+                        <li>Broken links detected: <strong><?= $broken_links ?></strong></li>
+                        <li>Estimated repair time: <strong>~5-10 seconds</strong></li>
+                        <li>Database lock: <strong>YES</strong></li>
+                    </ul>
+                </div>
+                
+                <form method="post">
+                    <?php wp_nonce_field('puri_admin_action', 'puri_admin_nonce'); ?>
+                    <input type="hidden" name="puri_do_repair_link" value="1">
+                    
+                    <div class="form-group">
+                        <label><strong>🔐 Masukkan Password WP Admin Anda:</strong></label>
+                        <input type="password" 
+                               name="repair_password" 
+                               required 
+                               class="full-width"
+                               placeholder="Password login WordPress">
+                    </div>
+                    
+                    <div class="modal-footer">
+                        <button type="button" 
+                                class="button" 
+                                onclick="closeRepairModal()">
+                            Batalkan
+                        </button>
+                        <button type="submit" 
+                                class="button button-primary"
+                                style="background:#dc2626; border-color:#b91c1c;"
+                                onclick="return confirm('FINAL CONFIRMATION:\n\nBackup database sudah dibuat?\nKasir sudah diberitahu?\n\nProses ini tidak bisa dibatalkan setelah dimulai.');">
+                            🔧 Eksekusi Repair
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+        
     </div>
+    
+    <style>
+        /* =============================================================== */
+        /* PURI MAINTENANCE UI STYLES */
+        /* =============================================================== */
+        .puri-maintenance-hub {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        }
+        
+        .puri-2panel-container {
+            display: grid;
+            grid-template-columns: 1.2fr 0.8fr;
+            gap: 24px;
+            margin-top: 20px;
+        }
+        
+        .puri-card {
+            background: #fff;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 24px;
+            margin-bottom: 24px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        }
+        
+        .puri-card h2 {
+            margin-top: 0;
+            font-size: 18px;
+            font-weight: 600;
+            border-bottom: 2px solid #2563eb;
+            padding-bottom: 12px;
+            margin-bottom: 20px;
+        }
+        
+        .danger-zone {
+            border-left: 4px solid #dc2626;
+        }
+        
+        .danger-zone h2 {
+            border-bottom-color: #dc2626;
+        }
+        
+        .badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+        }
+        
+        .badge-success {
+            background: #d1fae5;
+            color: #065f46;
+        }
+        
+        .badge-error {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+        
+        .badge-warning {
+            background: #fef3c7;
+            color: #92400e;
+        }
+        
+        .alert {
+            padding: 16px;
+            border-radius: 6px;
+            margin: 20px 0;
+            border-left: 4px solid;
+        }
+        
+        .alert-success {
+            background: #ecfdf5;
+            border-left-color: #10b981;
+            color: #065f46;
+        }
+        
+        .alert-warning {
+            background: #fffbeb;
+            border-left-color: #f59e0b;
+            color: #92400e;
+        }
+        
+        .alert strong {
+            display: block;
+            margin-bottom: 8px;
+        }
+        
+        .alert p {
+            margin: 4px 0;
+        }
+        
+        .repair-section {
+            margin-top: 20px;
+        }
+        
+        .checkbox-group {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            margin: 16px 0;
+        }
+        
+        .checkbox-group label {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px;
+            background: #f9fafb;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        
+        .checkbox-group label:hover {
+            background: #f3f4f6;
+        }
+        
+        .password-box {
+            background: #fef2f2;
+            border: 1px solid #fecaca;
+            border-radius: 6px;
+            padding: 20px;
+            margin-top: 20px;
+        }
+        
+        .password-box input[type="password"] {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #d1d5db;
+            border-radius: 4px;
+            margin: 10px 0 15px 0;
+        }
+        
+        .button-danger {
+            background: #dc2626 !important;
+            border-color: #b91c1c !important;
+            color: white !important;
+            width: 100%;
+            height: 48px;
+            font-size: 15px;
+            font-weight: 600;
+        }
+        
+        .help-card {
+            background: #fff;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+            position: sticky;
+            top: 32px;
+        }
+        
+        .help-card h3 {
+            margin-top: 0;
+            font-size: 16px;
+            font-weight: 600;
+            color: #2563eb;
+            border-bottom: 2px solid #dbeafe;
+            padding-bottom: 10px;
+        }
+        
+        .help-section {
+            margin: 20px 0;
+        }
+        
+        .help-section h4 {
+            font-size: 14px;
+            font-weight: 600;
+            color: #1e293b;
+            margin-bottom: 10px;
+        }
+        
+        .help-section ul,
+        .help-section ol {
+            margin: 10px 0;
+            padding-left: 20px;
+            line-height: 1.8;
+        }
+        
+        .help-section code {
+            background: #f1f5f9;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 12px;
+            color: #dc2626;
+        }
+        
+        .warning-list {
+            list-style: none;
+            padding: 0;
+        }
+        
+        .warning-list li {
+            padding: 8px 12px;
+            background: #fef3c7;
+            border-left: 3px solid #f59e0b;
+            margin-bottom: 8px;
+            border-radius: 4px;
+        }
+        
+        .puri-modal {
+            position: fixed;
+            z-index: 99999;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.6);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .puri-modal-content {
+            background: #fff;
+            padding: 30px;
+            border-radius: 12px;
+            max-width: 600px;
+            width: 90%;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            position: relative;
+        }
+        
+        .puri-modal-close {
+            position: absolute;
+            right: 20px;
+            top: 15px;
+            font-size: 28px;
+            cursor: pointer;
+            color: #94a3b8;
+        }
+        
+        .puri-modal h2 {
+            margin-top: 0;
+            color: #dc2626;
+        }
+        
+        .modal-warning {
+            background: #fffbeb;
+            border-left: 4px solid #f59e0b;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 4px;
+        }
+        
+        .modal-warning ul {
+            margin: 10px 0 0 0;
+            padding-left: 20px;
+        }
+        
+        .form-group {
+            margin: 20px 0;
+        }
+        
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+        }
+        
+        .full-width {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #d1d5db;
+            border-radius: 4px;
+        }
+        
+        .modal-footer {
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+            margin-top: 24px;
+        }
+        
+        @media (max-width: 1280px) {
+            .puri-2panel-container {
+                grid-template-columns: 1fr;
+            }
+            
+            .help-card {
+                position: static;
+            }
+        }
+    </style>
+    
+    <script>
+    function openRepairModal() {
+        document.getElementById('repairModal').style.display = 'flex';
+    }
+    
+    function closeRepairModal() {
+        document.getElementById('repairModal').style.display = 'none';
+    }
+    
+    window.onclick = function(event) {
+        const modal = document.getElementById('repairModal');
+        if (event.target === modal) {
+            closeRepairModal();
+        }
+    }
+    </script>
+    
     <?php
 }
 
 
-// ========================================================================
-// NEW: USER MANAGER PAGE RENDERER
-// ========================================================================
 
 function puri_render_user_manager_page() {
     
@@ -1153,11 +1716,11 @@ function puri_render_user_manager_page() {
 }
 
 
-// Snippet untuk diletakkan di fungsi render MC-17 (Setup)
-function puri_render_uninstall_settings() {
-    $current_fallback = get_option( 'puri_uninstall_fallback_role', 'subscriber' );
-    $delete_flag      = get_option( 'puri_delete_data_on_uninstall', 'no' );
-    $wp_roles         = wp_roles()->get_names(); // Ambil semua role yang ada di WP
+function puri_render_uninstall_settings()
+{
+    $current_fallback = get_option('puri_uninstall_fallback_role', 'subscriber');
+    $delete_flag      = get_option('puri_delete_data_on_uninstall', 'no');
+    $wp_roles         = wp_roles()->get_names();
     ?>
     <div class="card">
         <h3>🛠 Uninstall Settings (Danger Zone)</h3>
@@ -1173,15 +1736,14 @@ function puri_render_uninstall_settings() {
                 <th>Fallback Role</th>
                 <td>
                     <select name="puri_uninstall_fallback_role">
-                        <?php foreach ( $wp_roles as $role_slug => $role_name ) : ?>
-                            <?php if ( !in_array($role_slug, ['finance', 'kasir']) ) : ?>
+                        <?php foreach ($wp_roles as $role_slug => $role_name) : ?>
+                            <?php if (!in_array($role_slug, ['finance', 'kasir'])) : ?>
                                 <option value="<?php echo $role_slug; ?>" <?php selected($current_fallback, $role_slug); ?>>
                                     <?php echo $role_name; ?>
                                 </option>
                             <?php endif; ?>
                         <?php endforeach; ?>
                     </select>
-                    <p class="description">User Finance/Kasir akan dipindahkan ke role ini saat plugin dihapus.</p>
                 </td>
             </tr>
         </table>
