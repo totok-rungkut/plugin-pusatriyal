@@ -51,7 +51,30 @@ class Puri_Cockpit_POS {
         // AJAX Endpoints - Customer Management (NEW v6.10.25)
         add_action('wp_ajax_puri_pos_create_customer', [$this, 'ajax_create_customer']);
 		add_action('wp_ajax_puri_pos_upload_customer_id', [$this, 'ajax_upload_customer_id']);
+		
+		// Register hooks -  Invoice / Receipt
+		// Load modular components
+		$this->load_invoice_module(); 
+		add_action('admin_enqueue_scripts', [$this, 'enqueue_assets']);
+
+    // ✅ ADD DEBUG LOG
+    error_log('🔍 Invoice module loaded: ' . (function_exists('puri_pos_render_invoice_modal') ? 'YES' : 'NO'));
+
     }
+
+
+/**
+ * Load Invoice Module
+ */
+private function load_invoice_module() {
+    $invoice_file = plugin_dir_path(__FILE__) . 'mc-05-part-invoice.php';
+    
+    if (file_exists($invoice_file)) {
+        require_once $invoice_file;
+    } else {
+        error_log('⚠️ Invoice module not found: mc-05-part-invoice.php');
+    }
+}
 
 
 /**
@@ -875,6 +898,13 @@ $items = $wpdb->get_results($wpdb->prepare("
 
             </div> <!-- End Container -->
         </div> <!-- End Wrap -->
+		
+        <?php 
+        // ✅ RENDER INVOICE MODAL
+        if (function_exists('puri_pos_render_invoice_modal')) {
+            puri_pos_render_invoice_modal();
+        }
+        ?>		
 
         <!-- ============================================ -->
         <!-- MODAL: QUICK ADD CUSTOMER                  -->
@@ -1206,18 +1236,20 @@ bindEvents() {
 
     // History Refresh
     $('#btn_refresh_history').on('click', () => this.loadStockAndHistory());
-// Pool Transaction Actions (Event Delegation)
-$(document).on('click', '.edit-pool-btn', (e) => {
-    const refId = $(e.currentTarget).data('ref-id');
-    console.log('🖱️ Edit Button Clicked, ref_id:', refId);
-    this.editFromPool(refId);
-});
 
-$(document).on('click', '.void-pool-btn', (e) => {
-    const refId = $(e.currentTarget).data('ref-id');
-    console.log('🖱️ Void Button Clicked, ref_id:', refId);
-    this.confirmVoid(refId);
-});
+
+	// Pool Transaction Actions (Event Delegation)
+	$(document).on('click', '.edit-pool-btn', (e) => {
+		const refId = $(e.currentTarget).data('ref-id');
+		console.log('🖱️ Edit Button Clicked, ref_id:', refId);
+		this.editFromPool(refId);
+	});
+
+	$(document).on('click', '.void-pool-btn', (e) => {
+		const refId = $(e.currentTarget).data('ref-id');
+		console.log('🖱️ Void Button Clicked, ref_id:', refId);
+		this.confirmVoid(refId);
+	});
 
     // Clear Form Button
     $('#btn_clear_form').on('click', () => {
@@ -1656,6 +1688,15 @@ renderHistoryTable() {
                     ${h.trade_mode === 'sell' ? '+' : '-'} ${U.idr(h.total_amount)}
                 </td>
                 <td class="tc">
+				
+<!-- ✅ TOMBOL PRINT INVOICE -->
+<button type="button" class="button button-small btn-print-invoice" 
+        data-ref-id="${h.ref_id}" 
+        title="Print Invoice"
+        style="background:#10b981; border-color:#059669; color:#fff;">
+    <i class="fa fa-print"></i>
+</button>
+				
                     ${actionButtons}
                 </td>
             </tr>
@@ -2341,6 +2382,7 @@ handleCheckout() {
 				if(r.success) {
 					const wasEditMode = this.currentEditRef !== null;
 					
+					Swal.close();
 					Swal.fire({
 						icon: 'success',
 						title: wasEditMode ? 'Transaksi Diupdate!' : 'Checkout Berhasil!',
@@ -2348,6 +2390,16 @@ handleCheckout() {
 						timer: 2000,
 						showConfirmButton: false
 					});
+
+        // âœ… AUTO-OPEN INVOICE (delay lebih pendek)
+        setTimeout(() => {
+            if (typeof POS_Invoice !== 'undefined') {
+                POS_Invoice.open(r.data.ref_id, true); // true = auto-print
+            } else {
+                console.error('❌ POS_Invoice module not loaded');
+            }
+        }, 1600);
+
 
 					// Memanggil fungsi reset otomatis untuk membersihkan semua panel
 					this.fullReset(); 
@@ -2366,6 +2418,27 @@ handleCheckout() {
 window.Cockpit = new CockpitPOS();
 
 });
+
+
+// =========================================================== tombol print ====
+// ✅ Event delegation harus di luar module (di document ready)
+// =============================================================================
+$(document).ready(function() {
+    $(document).on('click', '.btn-print-invoice', function(e) {
+        e.preventDefault();
+        const refId = $(this).data('ref-id');
+        console.log('🖨️ Print button clicked for:', refId);
+        
+        if (typeof POS_Invoice !== 'undefined') {
+            POS_Invoice.open(refId, false); // false = manual print
+        } else {
+            console.error('❌ POS_Invoice module not available');
+            Swal.fire('Error', 'Invoice system not loaded', 'error');
+        }
+    });
+});
+
+
 
 // activate font Lucide ------------------
 jQuery(document).ready(function($) { if (typeof lucide !== 'undefined') { lucide.createIcons(); } });
